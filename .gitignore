@@ -60,5 +60,3 @@ Thumbs.db
 /assets/spiral/pcd/*.pcd
 /assets/spiral/tomogram/*.pickle
 /assets/spiral/routes/*.csv
-
-THIRD_PARTY_NOTICES.md
