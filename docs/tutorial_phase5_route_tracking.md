@@ -12,23 +12,23 @@ RViz 中橙色 `/pct_path` 是 PCT 的全局路线，绿色 `/quad_0/path` 是�
 
 ## 2. 全局参考负责守住走廊，局部轨迹负责平滑
 
-使用 Garage 的 2572 点 PCT 路线复现旧全局拟合，测得它相对原折线的最大三维
-偏差为 `15.6042 m`，最大水平偏差为 `14.3332 m`。这解释了为什么机器人看起来
-像是在跨墙或绕开楼梯：局部规划器拿到的全局参考本身已经离开 PCT 走廊。
+旧实现会对完整跨层路线做一次全局拟合。弯道较急或楼层连接较近时，拟合曲线可能
+离开原始折线。机器人看起来像在跨墙或绕开楼梯，问题其实出在局部规划器收到的
+全局参考已经偏离 PCT 走廊。
 
 当前实现把职责拆开：
 
 ```text
-PCT 折线 ──RDP(0.10 m)──> 236 个关键点
+PCT 折线 ──RDP(0.10 m)──> 三维关键点
                               │
                               ├─ 分段线性全局参考：不抄近路
                               │
-                              └─ 1.0 m 局部窗口：SCAN B-spline 平滑与避障
+                              └─ 局部窗口：SCAN B-spline 平滑与避障
 ```
 
 分段线性并不意味着机器人动作是折线。它只定义全局“导航走廊中心线”；真正发布给
-执行器的仍是 SCAN 优化后的三次 B-spline。`planning_horizon:=1.0` 还会把弯道处
-单次局部弦线相对原路线的最大偏差控制在约 `0.21 m`。
+执行器的仍是 SCAN 优化后的三次 B-spline。Building 默认使用 `0.8 m` 的短窗口，
+减少楼梯和转角处的局部捷径。
 
 ## 3. 局部完成不等于全局完成
 
@@ -38,10 +38,10 @@ PCT 折线 ──RDP(0.10 m)──> 236 个关键点
 - 尚未到全局末端：从 `EXEC_TRAJ` 转到 `REPLAN_TRAJ`，继续生成下一窗口；
 - 已到全局末端：清除目标并进入 `WAIT_TARGET`。
 
-无界面联调已经连续收到 trajectory 1 到 13，进度从 `1.40/735.91 s` 单调推进到
-`13.80/735.91 s`，没有在第一段后停止。
+无界面联调会持续收到递增的 trajectory 编号。编号停在 1，通常表示状态机没有从
+局部完成状态继续进入 `REPLAN_TRAJ`。
 
-## 4. 为什么 Garage 必须使用 open-loop
+## 4. 为什么跨层演示使用 open-loop
 
 这里的 `open_loop` 是演示专用的三维轨迹执行器：它直接采样
 `planning/bspline`，发布 x、y、z 和由速度方向得到的 yaw。`closed_loop` 则通过
@@ -49,33 +49,23 @@ PCT 折线 ──RDP(0.10 m)──> 236 个关键点
 
 这不代表真实四足机器人应当开环控制。真机链路仍应是：SCAN 期望运动 → 速度或
 足端命令 → MoE 低层 policy → 关节执行与状态反馈。本项目当前目标是视频展示，
-所以 Garage 联合启动默认使用三维 `open_loop`。
+所以论文场景启动器默认使用三维 `open_loop`。
 
-## 5. 十几秒验证一次坡道上升
+## 5. 验证 Building 跨层跟踪
 
-仓库提供
-`src/planner/plan_manage/config/garage_ramp_smoke.yaml`，它截取了固定 PCT 路线的
-第一段坡道。先构建并启动：
+先运行 PCT A* 测试：
 
 ```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select scan_planner
-source install/setup.bash
-
-ros2 launch scan_planner run.launch.py \
-  is_real_world:=false navi_mode:=3 sensor_type:=lidar \
-  controller_mode:=open_loop use_gpu:=false \
-  use_pcd_map:=true \
-  pcd_map_file:="$PWD/assets/garage/pcd/garage_scan_0p20.pcd" \
-  reference_path_file:="$PWD/src/planner/plan_manage/config/garage_ramp_smoke.yaml" \
-  reference_path_min_distance:=0.2 \
-  reference_path_simplify_tolerance:=0.1 \
-  planning_horizon:=1.0 \
-  map_size_x:=180.0 map_size_y:=240.0 map_size_z:=25.0 \
-  init_x:=27.560007095 init_y:=67.617263794 init_z:=0.794042969
+./scripts/test_pct_building_astar.sh --force
 ```
 
-另一个终端观察机身高度：
+测试通过后自动播放默认路线：
+
+```bash
+./scripts/launch_pct_scan_building.sh plan_on_startup:=true
+```
+
+另开终端观察机身高度：
 
 ```bash
 source /opt/ros/humble/setup.bash
@@ -83,20 +73,6 @@ source install/setup.bash
 ros2 topic echo /quad_0/body_pose --field pose.pose.position.z
 ```
 
-本次回归共采样 2277 帧，z 从 `0.794043 m` 连续上升到 `1.309489 m`，净上升
-`0.515446 m`；同时连续发布了 11 条局部轨迹。由此可以分别确认“持续滚动规划”
-和“执行器真实跟随三维高度”。
-
-## 6. 验收命令
-
-完整 Garage 路线仍用统一脚本：
-
-```bash
-./scripts/launch_pct_scan_garage.sh \
-  plan_on_startup:=true \
-  enable_interactive_markers:=false
-```
-
 日志应持续出现递增的 `Received trajectory N`，而不是 trajectory 1 后进入
-`WAIT_TARGET`。RViz 中橙色为 PCT 全局路线、绿色为机器人历史轨迹。接下来要做的
-是把 Garage SDF 和 Go2 可视模型接入 Gazebo，并由同一个三维 body pose 驱动。
+`WAIT_TARGET`。RViz 中橙色是 PCT 全局路线，绿色是机器人历史轨迹。机器人进入
+楼梯后，`/quad_0/body_pose` 的 z 应随局部轨迹变化。

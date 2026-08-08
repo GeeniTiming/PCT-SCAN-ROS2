@@ -17,7 +17,6 @@ setup(
         ),
         ("share/" + package_name, ["package.xml"]),
         (os.path.join("share", package_name, "launch"), glob("launch/*.launch.py")),
-        (os.path.join("share", package_name, "worlds"), glob("worlds/*.sdf")),
     ],
     install_requires=["setuptools", "scipy"],
     tests_require=["pytest"],
@@ -29,9 +28,7 @@ setup(
     entry_points={
         "console_scripts": [
             "bridge_node = pct_scan_bridge.bridge_node:main",
-            "garage_astar_smoke = pct_scan_bridge.garage_astar_smoke:main",
-            "pct_route_smoke = pct_scan_bridge.garage_astar_smoke:main",
-            "gazebo_pose_sync = pct_scan_bridge.gazebo_pose_sync:main",
+            "pct_route_smoke = pct_scan_bridge.route_smoke:main",
         ],
     },
 )

@@ -10,7 +10,7 @@ def generate_launch_description():
     arguments = [
         DeclareLaunchArgument("tomogram_path"),
         DeclareLaunchArgument("rsg_root", default_value="/tmp"),
-        DeclareLaunchArgument("scene_name", default_value="garage"),
+        DeclareLaunchArgument("scene_name", default_value="building"),
         DeclareLaunchArgument("frame_id", default_value="world"),
         DeclareLaunchArgument("coord_mode", default_value="identity"),
         DeclareLaunchArgument("path_topic", default_value="/pct_path"),

@@ -82,9 +82,9 @@ PCT 晚启动，也能收到最近一条全局路径；默认 volatile 订阅无
 ./scripts/launch_pct_scan_phase1.sh
 ```
 
-这个早期 Multifloor 示例现在只从本仓库的 `assets/phase1` 读取资产，不再访问
-外部 `pct_scan` 文件夹。当前主线演示已经切换到 Garage，建议直接使用第四阶段
-的联合启动脚本。
+这个早期 Multifloor 示例只从本仓库的 `assets/phase1` 读取资产，不访问外部
+`pct_scan` 文件夹。当前主线使用 Building，启动入口是
+`./scripts/launch_pct_scan_building.sh`。
 
 进入 RViz 后：
 

@@ -31,13 +31,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--input",
         type=Path,
-        default=SCAN_ROOT / "assets/garage/pcd/garage_pct_0p10.pcd",
-        help="input PCD (default: Garage 0.10 m source cloud)",
+        required=True,
+        help="input PCD map",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=SCAN_ROOT / "assets/garage/tomogram/garage_pct_0p10.pickle",
+        required=True,
         help="output pickle path",
     )
     parser.add_argument("--resolution", type=positive_float, default=0.20)
@@ -98,7 +98,7 @@ def load_pct_runtime():
     except ImportError as error:
         raise RuntimeError(
             "PCT tomography is not importable. Run through "
-            "scripts/generate_garage_tomogram.sh."
+            "scripts/generate_tomogram.sh."
         ) from error
 
     # The upstream CUDA helper declares coordinates as the undefined `float16`

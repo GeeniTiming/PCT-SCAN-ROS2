@@ -55,7 +55,7 @@ def generate_launch_description():
 
     bridge = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(bridge_share, "launch", "garage_bridge.launch.py")
+            os.path.join(bridge_share, "launch", "pct_bridge.launch.py")
         ),
         launch_arguments={
             "tomogram_path": LaunchConfiguration("tomogram_path"),

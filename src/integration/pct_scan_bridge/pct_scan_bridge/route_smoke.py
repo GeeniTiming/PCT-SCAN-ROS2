@@ -11,7 +11,6 @@ import numpy as np
 
 from pct_planner.config import Config
 
-from .bridge_node import GARAGE_GOAL, GARAGE_START
 from .dynamic_planner import DynamicLayerTomogramPlanner
 
 
@@ -20,8 +19,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tomogram", type=Path, required=True)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--force", action="store_true")
-    parser.add_argument("--start", type=float, nargs=3, default=GARAGE_START)
-    parser.add_argument("--goal", type=float, nargs=3, default=GARAGE_GOAL)
+    parser.add_argument("--start", type=float, nargs=3, required=True)
+    parser.add_argument("--goal", type=float, nargs=3, required=True)
     parser.add_argument("--snap-radius", type=int, default=10)
     parser.add_argument("--require-cross-floor", action="store_true")
     parser.add_argument("--min-height-gain", type=float, default=0.0)

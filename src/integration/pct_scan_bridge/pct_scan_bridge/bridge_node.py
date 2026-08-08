@@ -1,4 +1,4 @@
-"""ROS 2 PCT bridge with Garage defaults and dynamic tomogram layers."""
+"""ROS 2 bridge between PCT global planning and SCAN local planning."""
 
 from __future__ import annotations
 
@@ -10,8 +10,6 @@ from .dynamic_planner import DynamicLayerTomogramPlanner
 from .tomogram_visualization import build_full_cost_tomogram
 
 
-GARAGE_START = np.array([16.760008, 14.617265, 0.089722], dtype=np.float32)
-GARAGE_GOAL = np.array([41.360008, 35.017265, 13.890625], dtype=np.float32)
 BUILDING_START = np.array([5.0, 5.0, 0.0], dtype=np.float32)
 BUILDING_GOAL = np.array([-6.0, -1.0, 14.0], dtype=np.float32)
 SPIRAL_DEMO_GOAL = np.array([3.2, -22.2, 4.0], dtype=np.float32)
@@ -74,11 +72,7 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
             f"clearance_cost={DynamicLayerTomogramPlanner.clearance_cost:.1f}, "
             f"step_weight={DynamicLayerTomogramPlanner.astar_step_cost_weight:.1f}"
         )
-        if scene_name.lower() == "garage":
-            self.tomo_file = ""
-            self.start_pos = GARAGE_START.copy()
-            self.end_pos = GARAGE_GOAL.copy()
-        elif scene_name.lower() == "building":
+        if scene_name.lower() == "building":
             self.tomo_file = "building2_9"
             self.start_pos = BUILDING_START.copy()
             self.end_pos = BUILDING_GOAL.copy()

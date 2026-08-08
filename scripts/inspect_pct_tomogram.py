@@ -19,9 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "pickle_path",
-        nargs="?",
         type=Path,
-        default=SCAN_ROOT / "assets/garage/tomogram/garage_pct_0p10.pickle",
     )
     parser.add_argument(
         "--cost-threshold",

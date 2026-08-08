@@ -11,14 +11,14 @@ for required_path in \
   "$PCT_PYTHON_PACKAGE/tomography/tomogram.py"
 do
   if [[ ! -e "$required_path" ]]; then
-    echo "[garage-tomogram] Missing required path: $required_path" >&2
+    echo "[pct-tomogram] Missing required path: $required_path" >&2
     exit 2
   fi
 done
 
 PYTHON_SITE="$($PCT_PYTHON -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
 if [[ -z "$PYTHON_SITE" || ! -d "$PYTHON_SITE" ]]; then
-  echo "[garage-tomogram] Could not resolve the PCT virtualenv site-packages" >&2
+  echo "[pct-tomogram] Could not resolve the PCT virtualenv site-packages" >&2
   exit 2
 fi
 
