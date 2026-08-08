@@ -52,7 +52,8 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME} OPTIONAL)
-install(FILES launch/default.rviz DESTINATION share/${PROJECT_NAME}/rviz OPTIONAL)
+install(FILES launch/default.rviz launch/building.rviz
+  DESTINATION share/${PROJECT_NAME}/rviz OPTIONAL)
 install(PROGRAMS
   scripts/keypoint_recorder.py
   scripts/reference_path_publisher.py
@@ -64,7 +65,7 @@ if(BUILD_TESTING)
   find_package(launch_testing_ament_cmake REQUIRED)
   ament_add_gtest(test_reference_path_utils test/test_reference_path_utils.cpp)
   target_include_directories(test_reference_path_utils PRIVATE include)
-  ament_target_dependencies(test_reference_path_utils nav_msgs)
+  ament_target_dependencies(test_reference_path_utils nav_msgs traj_utils)
   target_link_libraries(test_reference_path_utils Eigen3::Eigen)
   set(_pytest_disable_plugin_autoload "$ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD}")
   set(ENV{PYTEST_DISABLE_PLUGIN_AUTOLOAD} "1")

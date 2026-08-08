@@ -21,10 +21,27 @@ def _setup(context):
     controllers_yaml = os.path.join(scan_share, "config", "controllers.yaml")
     is_real = _as_bool(LaunchConfiguration("is_real_world").perform(context))
     use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
+    enable_local_sensing = _as_bool(
+        LaunchConfiguration("enable_local_sensing").perform(context)
+    )
     sensor_type = LaunchConfiguration("sensor_type").perform(context)
     controller_mode = LaunchConfiguration("controller_mode").perform(context)
     keypoints_file = LaunchConfiguration("keypoints_file").perform(context)
     reference_path_file = LaunchConfiguration("reference_path_file").perform(context)
+    initial_path_topic = LaunchConfiguration("initial_path_topic").perform(context)
+    reference_path_min_distance = float(
+        LaunchConfiguration("reference_path_min_distance").perform(context)
+    )
+    reference_path_simplify_tolerance = float(
+        LaunchConfiguration("reference_path_simplify_tolerance").perform(context)
+    )
+    planning_horizon = float(LaunchConfiguration("planning_horizon").perform(context))
+    max_vel_text = LaunchConfiguration("max_vel").perform(context)
+    max_acc_text = LaunchConfiguration("max_acc").perform(context)
+    collision_radius_text = LaunchConfiguration("collision_radius").perform(context)
+    collision_offset_text = LaunchConfiguration("collision_offset").perform(context)
+    inflation_z_up_text = LaunchConfiguration("inflation_z_up").perform(context)
+    inflation_z_down_text = LaunchConfiguration("inflation_z_down").perform(context)
     navi_mode = int(LaunchConfiguration("navi_mode").perform(context))
     if sensor_type not in ("lidar", "depth"):
         raise RuntimeError("sensor_type must be 'lidar' or 'depth'")
@@ -66,6 +83,10 @@ def _setup(context):
     else:
         body_pose = "/quad_0/body_pose"
         sensor_pose = "/quad_0/camera_pose" if sensor_type == "depth" else "/quad_0/lidar_pose"
+        if not enable_local_sensing:
+            # Keep the sliding collision-map window centered even when the
+            # video-only demo intentionally omits the simulated sensor node.
+            sensor_pose = body_pose
         cloud = "/quad_0/cloud"
         depth = "/quad_0/depth"
         cloud_is_world = True
@@ -77,10 +98,37 @@ def _setup(context):
         **common,
         **intrinsics,
         "fsm.navi_mode": navi_mode,
+        "fsm.reference_path_min_distance": reference_path_min_distance,
+        "fsm.reference_path_simplify_tolerance": reference_path_simplify_tolerance,
+        "fsm.planning_horizon": planning_horizon,
+        "manager.planning_horizon": planning_horizon,
         "grid_map.sensor_type": sensor_type,
         "grid_map.cloud_is_world": cloud_is_world,
         "grid_map.need_extrinsic": need_extrinsic,
     }
+    if max_vel_text:
+        max_vel = float(max_vel_text)
+        if max_vel <= 0.0:
+            raise RuntimeError("max_vel must be positive")
+        planner_overrides["manager.max_vel"] = max_vel
+        planner_overrides["optimization.max_vel"] = max_vel
+    if max_acc_text:
+        max_acc = float(max_acc_text)
+        if max_acc <= 0.0:
+            raise RuntimeError("max_acc must be positive")
+        planner_overrides["manager.max_acc"] = max_acc
+        planner_overrides["optimization.max_acc"] = max_acc
+    for text, parameter in (
+        (collision_radius_text, "grid_map.double_cylinder_radius"),
+        (collision_offset_text, "grid_map.double_cylinder_offset"),
+        (inflation_z_up_text, "grid_map.obstacles_inflation_z_up"),
+        (inflation_z_down_text, "grid_map.obstacles_inflation_z_down"),
+    ):
+        if text:
+            value = float(text)
+            if value < 0.0:
+                raise RuntimeError(f"{parameter} must be non-negative")
+            planner_overrides[parameter] = value
     actions = [
         Node(
             package="scan_planner",
@@ -94,7 +142,7 @@ def _setup(context):
                 ("cloud", cloud),
                 ("depth", depth),
                 ("move_base_simple/goal", "/move_base_simple/goal"),
-                ("initial_path", "/initial_path"),
+                ("initial_path", initial_path_topic),
             ],
         )
     ]
@@ -182,7 +230,7 @@ def _setup(context):
                 parameters=[reference_path_file, common],
                 remappings=[
                     ("body_pose", body_pose),
-                    ("initial_path", "/initial_path"),
+                    ("initial_path", initial_path_topic),
                 ],
             )
         )
@@ -208,6 +256,7 @@ def _setup(context):
                             "is_real_world",
                             "sensor_type",
                             "use_gpu",
+                            "enable_local_sensing",
                             "use_pcd_map",
                             "pcd_map_file",
                             "map_size_x",
@@ -231,7 +280,18 @@ def generate_launch_description():
             DeclareLaunchArgument("controller_mode", default_value="closed_loop"),
             DeclareLaunchArgument("keypoints_file", default_value=""),
             DeclareLaunchArgument("reference_path_file", default_value=""),
+            DeclareLaunchArgument("initial_path_topic", default_value="/initial_path"),
+            DeclareLaunchArgument("reference_path_min_distance", default_value="0.5"),
+            DeclareLaunchArgument("reference_path_simplify_tolerance", default_value="0.0"),
+            DeclareLaunchArgument("planning_horizon", default_value="3.5"),
+            DeclareLaunchArgument("max_vel", default_value=""),
+            DeclareLaunchArgument("max_acc", default_value=""),
+            DeclareLaunchArgument("collision_radius", default_value=""),
+            DeclareLaunchArgument("collision_offset", default_value=""),
+            DeclareLaunchArgument("inflation_z_up", default_value=""),
+            DeclareLaunchArgument("inflation_z_down", default_value=""),
             DeclareLaunchArgument("use_gpu", default_value="false"),
+            DeclareLaunchArgument("enable_local_sensing", default_value="true"),
             DeclareLaunchArgument("use_pcd_map", default_value="false"),
             DeclareLaunchArgument("pcd_map_file", default_value=""),
             DeclareLaunchArgument("map_size_x", default_value="40.0"),

@@ -19,6 +19,9 @@ def _setup(context):
 
     use_pcd_map = _as_bool(LaunchConfiguration("use_pcd_map").perform(context))
     use_gpu = _as_bool(LaunchConfiguration("use_gpu").perform(context))
+    enable_local_sensing = _as_bool(
+        LaunchConfiguration("enable_local_sensing").perform(context)
+    )
     use_sim_time = _as_bool(LaunchConfiguration("use_sim_time").perform(context))
     pcd_map_file = LaunchConfiguration("pcd_map_file").perform(context)
     sensor_type = LaunchConfiguration("sensor_type").perform(context)
@@ -74,8 +77,8 @@ def _setup(context):
             )
         )
 
-    nodes.extend(
-        [
+    if enable_local_sensing:
+        nodes.append(
             Node(
                 package="local_sensing_node",
                 executable="opengl_render_node" if use_gpu else "pcl_render_node",
@@ -103,24 +106,26 @@ def _setup(context):
                     ("dyn_cloud", "/quad_0/dyn_cloud"),
                     ("uav_cloud", "/quad_0/uav_cloud"),
                 ],
-            ),
-            Node(
-                package="odom_visualization",
-                executable="odom_visualization",
-                name="odom_visualization",
-                output="screen",
-                parameters=[simulator_yaml, {"use_sim_time": use_sim_time}],
-                remappings=[
-                    ("body_pose", "/quad_0/body_pose"),
-                    ("pose", "/quad_0/pose"),
-                    ("path", "/quad_0/path"),
-                    ("velocity", "/quad_0/velocity"),
-                    ("trajectory", "/quad_0/trajectory"),
-                    ("robot", "/quad_0/robot"),
-                    ("height", "/quad_0/height"),
-                ],
-            ),
-        ]
+            )
+        )
+
+    nodes.append(
+        Node(
+            package="odom_visualization",
+            executable="odom_visualization",
+            name="odom_visualization",
+            output="screen",
+            parameters=[simulator_yaml, {"use_sim_time": use_sim_time}],
+            remappings=[
+                ("body_pose", "/quad_0/body_pose"),
+                ("pose", "/quad_0/pose"),
+                ("path", "/quad_0/path"),
+                ("velocity", "/quad_0/velocity"),
+                ("trajectory", "/quad_0/trajectory"),
+                ("robot", "/quad_0/robot"),
+                ("height", "/quad_0/height"),
+            ],
+        )
     )
     return nodes
 
@@ -131,6 +136,7 @@ def generate_launch_description():
             DeclareLaunchArgument("is_real_world", default_value="false"),
             DeclareLaunchArgument("sensor_type", default_value="lidar"),
             DeclareLaunchArgument("use_gpu", default_value="false"),
+            DeclareLaunchArgument("enable_local_sensing", default_value="true"),
             DeclareLaunchArgument("use_pcd_map", default_value="false"),
             DeclareLaunchArgument("pcd_map_file", default_value=""),
             DeclareLaunchArgument("map_size_x", default_value="40.0"),

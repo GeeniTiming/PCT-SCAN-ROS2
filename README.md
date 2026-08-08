@@ -1,178 +1,153 @@
-<div align="center">
-  <h1>SCAN-Planner ROS 2</h1>
-  <h2>面向路线引导四足长程导航的空间碰撞感知局部规划器</h2>
-</div>
+# PCT-SCAN-ROS2
 
-<p align="center">
-  <img src="assets/images/demo1.png" width="100%"/>
-</p>
-<p align="center">
-  <img src="assets/images/demo2.png" width="100%"/>
-</p>
-<p align="center">
-  <img src="assets/images/demo3.png" width="100%"/>
-</p>
-<p align="center">
-  <img src="assets/images/abstract_real.jpg" width="100%"/>
-</p>
+PCT 全局跨层搜索 + SCAN 局部轨迹规划的 ROS 2 Humble 四足导航演示工程。
 
-> 二编：增加一个map.pcd，并提供测试例子（非搭建gazebo测试）
+本工程面向 RViz 视频演示，不依赖 Gazebo 接触物理：PCT 在点云层析图上搜索全局
+三维路线，SCAN 沿这条路线滚动生成局部 B-spline，Go2 模型按开环轨迹和步态动画
+运动。Start/Goal 可以在 RViz 中通过 Interactive Marker 手动拖动，包括 Z 轴，因此
+可以指定跨越多层的路线。
 
-SCAN-Planner 是一款面向四足机器人导航的空间碰撞感知局部规划器。本分支是原生 ROS 2 自移植版本，适配 Ubuntu 22.04、ROS 2 Humble、C++17 和 `colcon` 构建系统。
+```mermaid
+flowchart LR
+  PCD[PCD 点云] --> TOMO[PCT tomogram]
+  TOMO --> ASTAR[PCT 多层 A*]
+  ASTAR -->|/pct_path| SCAN[SCAN Mode 3]
+  SCAN --> BS[局部 B-spline]
+  BS --> GO2[Go2 RViz 动画]
+```
 
-本仓库是 [wuyi2121/SCAN-Planner](https://github.com/wuyi2121/SCAN-Planner) 的衍生 ROS 2 移植版。核心算法、项目设计与原始研究工作归功于 Han Zheng、Zhe Chen、Yiwen Fu、Ming Yang 和 Tong Qin；ROS 2 适配由本仓库维护者完成。
+## 已验证场景
 
+| 场景 | 默认路线 | 验证结果 | 启动命令 |
+|---|---:|---|---|
+| Building | 地面至上层，约 14 m 高差 | PCT 跨层 A* + SCAN 连续跟踪 | `./scripts/launch_pct_scan_building.sh` |
+| Plaza | 37.12 m | PCT A*；SCAN 进入持续重规划 | `./scripts/launch_pct_scan_plaza.sh` |
+| Spiral | 38.30 m、3.80 m 爬升、2 层 | PCT A*；SCAN 连续 5 个以上窗口 | `./scripts/launch_pct_scan_spiral.sh` |
+| Garage | 社区场景，非 PCT 原论文资产 | 保留为可选实验 | `./scripts/launch_pct_scan_garage.sh` |
 
+Plaza 与 Spiral 使用基于 tomogram 距离变换的软中线代价，默认路线的 5% 分位净空
+分别为 0.42 m 和 0.40 m。它只影响 A* 在多个可行解之间的选择，不改变 PCT 的
+`cost <= 20` 可通行判定。Building、Plaza、Spiral 是 PCT 论文/官方仓库列出的三种
+场景；RMUC 是 ROS 2 分支后来添加的配置，不在本工程的“论文场景稳定演示”范围内。
 
-## 构建
+## 环境与构建
 
-安装 ROS 2 Humble 及包依赖后，在工作空间根目录下执行构建：
+支持 Ubuntu 22.04、ROS 2 Humble、Python 3.10 和 C++17。先安装 ROS/SCAN 系统依赖：
 
 ```bash
 sudo apt update
+sudo apt install -y \
+  python3-colcon-common-extensions python3-rosdep ninja-build \
+  libarmadillo-dev libglew-dev libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev
+
 rosdep update
 rosdep install --from-paths src --ignore-src -r -y
-sudo apt install libarmadillo-dev libglew-dev libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev
+```
 
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release
+PCT 的 C++ 核心依赖 GTSAM 4.2 和 OSQP 1.0。源码和安装结果会放在本仓库被 Git
+忽略的 `.deps/`，不再要求 source 另一个 PCT 工作空间：
+
+```bash
+./scripts/setup_pct_dependencies.sh
+./scripts/build_workspace.sh
 source install/setup.bash
 ```
 
-默认构建 CPU 端本地感知后端，如需构建 OpenGL 后端可执行：
+已有依赖安装时也可以显式指定：
 
 ```bash
-colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release -DUSE_GPU=ON
+PCT_DEPS_ROOT=/path/to/deps ./scripts/build_workspace.sh
 ```
-仓库不再链接自带的 x86_64 架构 GLFW 动态库，GPU 构建依赖系统安装的 GLFW、GLEW 和 OpenGL 相关包。
 
-## 快速启动
+## 快速演示
 
----
-
-### 1.1、在一个终端启动 RViz2：
+先做无界面的 PCT 路线验收：
 
 ```bash
-source install/setup.bash
-ros2 launch scan_planner rviz.launch.py
+./scripts/test_pct_building_astar.sh --force
+./scripts/test_pct_plaza_astar.sh --force
+./scripts/test_pct_spiral_astar.sh --force
 ```
-### 1.2、在另一个终端启动自定义确定性仿真器与规划器（Mode 1 二维闭环演示，机身高度保持不变）：
+
+再启动任一场景：
 
 ```bash
-source install/setup.bash
-ros2 launch scan_planner run.launch.py \
-  is_real_world:=false navi_mode:=1 sensor_type:=lidar \
-  controller_mode:=closed_loop use_gpu:=false
+./scripts/launch_pct_scan_building.sh
+./scripts/launch_pct_scan_plaza.sh
+./scripts/launch_pct_scan_spiral.sh
 ```
----
 
+在 RViz 中：
 
-### 2.1、在一个终端启动 RViz2：
+1. 选择工具栏的 `Interact`。
+2. 拖动绿色 Start 和红色 Goal；跨层时用蓝色 Z 轴移动到目标楼层。
+3. 右键任一 marker，选择 `Plan route`。
+4. 观察 `/pct_path` 全局路线、SCAN 局部轨迹和 Go2 动画。
+
+需要固定端点自动播放时：
 
 ```bash
-source install/setup.bash
-ros2 launch scan_planner rviz.launch.py
+./scripts/launch_pct_scan_spiral.sh plan_on_startup:=true
 ```
-### 2.2、使用 `map.pcd` 运行 Mode 3 跨层开环演示(注意替换自己的路径)：
+
+视频模式默认 `enable_local_sensing:=false`。PCD 仍用于场景显示和 PCT 地形代价；
+关闭 SCAN 的稠密点云碰撞膨胀可避免楼梯踏步被误当成封闭障碍。这里验证的是规划与
+轨迹跟踪，不等价于接触动力学、足端落脚或真机低层 policy 验证。
+
+## Spiral 资产
+
+Building 和 Plaza 资产来自 PCT 官方资源，并保留 GPL 上游说明。Spiral 来自 3D2M
+planner，但其仓库当前没有明确许可证，因此本项目不把 Spiral PCD/派生数据提交到
+Git。请在本地下载并用 CPU 生成 tomogram：
 
 ```bash
-source install/setup.bash
-ros2 launch scan_planner run.launch.py \
-  is_real_world:=false navi_mode:=3 sensor_type:=lidar \
-  controller_mode:=open_loop use_gpu:=false \
-  use_pcd_map:=true \
-  pcd_map_file:=/your_map_location/map.pcd \
-  reference_path_file:=/your_project_location/src/planner/plan_manage/config/reference_path.map.yaml
+./scripts/fetch_spiral_asset.sh
+./scripts/setup_tomography_env.sh
+./scripts/generate_spiral_tomogram.sh
+./scripts/test_pct_spiral_astar.sh --force
 ```
 
-示例参考路径从 `(-5.5, 5.5, 0.10)` 沿地图坡道上升到
-`(-5.5, -4.5, 1.55)`。路径文件中的 `z` 是地面/路线高度，规划器会再加上
-`grid_map.body_height`（默认 `0.4 m`），因此目标机身高度约为 `1.95 m`。
+生成器会优先使用 CUDA；GPU 驱动不可用时自动回退到等价的 NumPy/SciPy 实现。
+校验值和资产来源见 `assets/<scene>/README.md`。
 
+## 工程结构
 
-RViz2 配置已适配 ROS 2 Humble：Go2 的 RobotModel 使用现有的 `meshes/base.dae`，Sliding Map Bounds 订阅 `/grid_map/sliding_map_bbox`，Goal 订阅 `/goal_point`。
-
-
-
-### 导航模式说明
-- `navi_mode:=1`：使用 RViz2 的 2D 目标点工具选择导航目标
-- `navi_mode:=2`：按照 ROS 2 参数文件中预设的 `fsm.waypoints` 路径点序列导航
-- `navi_mode:=3`：订阅 `initial_path` 话题获取全局路径，并在局部范围内进行避障
-
-控制器模式分为 `open_loop`（开环）和 `closed_loop`（闭环）两种。本次移植保留的核心启动参数包括：`is_real_world`、`navi_mode`、`sensor_type`、`controller_mode`、`use_gpu`、`use_pcd_map` 和 `pcd_map_file`。
-
-与原作者实现保持一致，`closed_loop` 通过平面 `cmd_vel` 跟踪 `x/y/yaw`，
-适用于二维仿真或真机底盘接口；多楼层仿真应使用 `open_loop`，直接按规划得到的
-三维 B-spline 发布里程计。Mode 3 默认从 `(-5.5, 5.5, 0.5)` 启动，Mode 1
-默认从 `(-19.0, 1.0, 0.25)` 启动，仍可用 `init_x`、`init_y`、`init_z` 覆盖。
-
-Mode 3 默认等待外部节点发布 `/initial_path`。也可以通过
-`reference_path_file` 启动仓库内的演示发布器；该发布器会等待首个
-`body_pose` 和规划器订阅者就绪后发布一次路径。路径至少需要两个 xyz 点，
-相邻点会按三维距离 `0.5 m` 降采样，并始终保留最终点。
-
-当 `use_pcd_map:=true` 时，必须提供已有的 PCD 点云地图文件：
-
-```bash
-ros2 launch scan_planner run.launch.py \
-  use_pcd_map:=true pcd_map_file:=/absolute/path/to/map.pcd
+```text
+PCT-SCAN-ROS2/
+├── src/pct/                         # 可构建的 PCT/tomography 源码
+├── src/integration/pct_scan_bridge/ # PCT → SCAN ROS 2 桥
+├── src/planner/                     # SCAN planner
+├── src/simulator/                   # Go2 RViz 动画及原 SCAN 工具
+├── assets/                          # 场景、tomogram、验收路线与来源说明
+├── scripts/                         # 依赖、生成、测试和启动入口
+├── docs/                            # 分阶段教程
+├── LICENSES/                        # 上游许可证全文
+└── NOTICE                           # 来源与修改声明
 ```
 
-实际硬件部署时，激光惯导里程计（LIO）、相机和宇树（Unitree）驱动均为外部依赖，默认启动会将规划器输入映射到 `/LIO/odom_vehicle`、`/LIO/odom_imu`、`/LIO/clouds_lidar` 话题以及 RealSense 对齐深度图话题，可根据实际安装的驱动栈修改话题重映射配置。
+核心接口：PCT 发布 `/pct_path` (`nav_msgs/Path`)；SCAN Mode 3 订阅后进行三维 RDP
+简化和分段线性参考参数化，再发布 `planning/bspline`。分段线性参考用于守住楼梯和
+窄通道的全局走廊，平滑只由局部 B-spline 完成。
 
-## 配置与接口
+更完整的原理和调试过程见：
 
-规划器、控制器和仿真器的参数分别位于：
-- `src/planner/plan_manage/config/planner.yaml`
-- `src/planner/plan_manage/config/controllers.yaml`
-- `src/planner/plan_manage/config/simulator.yaml`
+- `docs/tutorial_phase4_pct_scan_bridge.md`
+- `docs/tutorial_phase5_route_tracking.md`
+- `docs/tutorial_phase7_building_rviz.md`
 
-ROS 2 参数名称使用点号分隔，例如 `grid_map.resolution`。预设路径点是由 xyz 三元组组成的浮点数组：
+## 来源与许可证
 
-```yaml
-scan_planner_node:
-  ros__parameters:
-    fsm.navi_mode: 2
-    fsm.waypoints: [0.0, 0.0, 0.3, 5.0, 1.0, 0.3]
-```
+- SCAN-Planner：<https://github.com/wuyi2121/SCAN-Planner>，Apache-2.0。
+- PCT planner：<https://github.com/byangw/PCT_planner>，其 NOTICE 明确为 GPL v2
+  或后续版本。
+- PCT ROS 2 移植来源：<https://github.com/2473o/PCT_planner/tree/feat/ros2pkg>。
+- Spiral/3D2M：<https://github.com/ZJU-FAST-Lab/3D2M-planner>，当前未发现明确
+  许可证，因此不随 Git 分发其资产。
 
-自定义消息类型为 `scan_planner_msgs/msg/Bspline` 和 `scan_planner_msgs/msg/DataDisp`。规划器相关话题均为相对话题，支持重映射，核心输出话题包括 `planning/bspline`、`planning/data_display` 和 `planning/go2_execution_frozen`。
+本仓库不是一个可以用单一 Apache-2.0 覆盖所有文件的工程。SCAN 包继续使用
+Apache-2.0；PCT、tomography 和直接派生的 bridge 使用 GPL-2.0-or-later；其他
+ROS 包保留各自 package.xml 声明的 GPL-3.0-only 或 BSD-3-Clause。完整映射见
+[`LICENSE`](LICENSE)、[`NOTICE`](NOTICE)、`src/pct/NOTICE` 和 `LICENSES/`。
 
-关键点记录器现在是原生的 `rclpy` 可执行程序：
-
-```bash
-ros2 run scan_planner keypoint_recorder.py --output keypoints.yaml
-```
-
-参考路径演示发布器也可以独立运行：
-
-```bash
-ros2 run scan_planner reference_path_publisher.py --ros-args \
-  --params-file src/planner/plan_manage/config/reference_path.map.yaml \
-  -r body_pose:=/quad_0/body_pose -r initial_path:=/initial_path
-```
-
-## Gazebo Fortress / Go2 仿真
-
-Go2 四足机器人物理模型基于 Gazebo Fortress、`ros_gz_sim` 和 `gz_ros2_control` 构建，对外提供 12 关节的 `joint_trajectory_controller`、`/joint_states` 话题、IMU 数据、四个足端接触力话题以及 `/clock` 时钟话题：
-
-```bash
-ros2 launch go2_description go2_sim.launch.py
-```
-
-如需在不启动物理仿真时查看模型，可运行：
-
-```bash
-ros2 launch go2_description go2_rviz.launch.py
-```
-旧版 Gazebo Classic 的轨迹/力可视化插件、外力插件以及宇树 ROS 1 专用插件已不在本 ROS 2 仿真版本中提供。
-
-
-## 致谢
-
-首先感谢原项目 [SCAN-Planner](https://github.com/wuyi2121/SCAN-Planner) 的作者 Han Zheng、Zhe Chen、Yiwen Fu、Ming Yang 和 Tong Qin 开源其研究成果与实现。本仓库在保留原项目 Apache-2.0 许可证的前提下完成 ROS 2 移植，完整署名见 [NOTICE](NOTICE)。
-
-SCAN-Planner 的实现借鉴了 EGO-Planner、ROG-Map、MARSIM、Mockamap 和 Leg-KILO 的算法思路与开源代码，真实机器人定位方案基于 Elevator-LIO / FAST-LIO2 实现。
-
-## 许可证
-
-本仓库遵循 [Apache License 2.0](LICENSE)。分发或派生本项目时，请保留 [NOTICE](NOTICE) 中的原项目署名与许可证信息。
+这是一份工程侧许可证审计，不构成法律意见。公开发布或商业使用前应再次核对每个
+第三方 asset 与依赖的授权条件。

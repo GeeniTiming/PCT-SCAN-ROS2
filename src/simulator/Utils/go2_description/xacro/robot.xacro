@@ -4,12 +4,14 @@
 
     <xacro:arg name="DEBUG" default="false"/>
     <xacro:arg name="use_gazebo" default="true"/>
+    <xacro:arg name="visual_only" default="false"/>
 
     <xacro:include filename="$(find go2_description)/xacro/const.xacro"/>
     <xacro:include filename="$(find go2_description)/xacro/materials.xacro"/>
     <xacro:include filename="$(find go2_description)/xacro/leg.xacro"/>
     <xacro:include filename="$(find go2_description)/xacro/ros2_control.xacro"/>
     <xacro:include filename="$(find go2_description)/xacro/gazebo.xacro"/>
+
     <!-- <xacro:include filename="$(find go2_gazebo)/launch/stairs.urdf.xacro"/> -->
 
     <!-- <xacro:stairs stairs="15" xpos="0" ypos="0" zpos="0" /> -->
@@ -137,5 +139,13 @@
     <xacro:if value="$(arg use_gazebo)">
         <xacro:go2_ros2_control/>
         <xacro:go2_gazebo/>
+    </xacro:if>
+
+    <!-- A static Gazebo model for trajectory visualization. It keeps all Go2
+         meshes but intentionally omits physics, collisions and ros2_control. -->
+    <xacro:if value="$(arg visual_only)">
+        <gazebo>
+            <static>true</static>
+        </gazebo>
     </xacro:if>
 </robot>

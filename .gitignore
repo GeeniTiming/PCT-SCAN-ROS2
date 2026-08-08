@@ -4,7 +4,11 @@
 /log/
 /devel/
 /.colcon/
+/.cache/
+/.deps/
+/.venv-tomography/
 /compile_commands.json
+/symlink_install_manifest.txt
 
 # ROS runtime state
 /.ros/
@@ -36,6 +40,9 @@ Thumbs.db
 /src/simulator/local_sensing/include/glad.c
 /src/simulator/local_sensing/include/glm/
 
+/assets/gif
+/assets/images
+
 # Native build artifacts
 *.o
 *.obj
@@ -44,3 +51,18 @@ Thumbs.db
 *.so.*
 *.dylib
 *.dll
+
+# Downloaded/generated Garage assets are kept locally but not committed.
+/assets/garage
+
+# Keep the legacy NumPy-2 pickle out of the release; the portable ROS 2
+# equivalent is assets/building/tomogram/building2_9_ros2.pickle.
+/assets/building/tomogram/building2_9.pickle
+
+# The 3D2M repository does not currently publish an explicit asset license.
+# Download/generate these locally through the scripts documented in README.
+/assets/spiral/pcd/*.pcd
+/assets/spiral/tomogram/*.pickle
+/assets/spiral/routes/*.csv
+
+THIRD_PARTY_NOTICES.md

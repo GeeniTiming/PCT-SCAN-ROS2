@@ -47,6 +47,10 @@ namespace scan_planner
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.0);
+    reference_path_min_distance_ =
+        load_parameter<double>(node_, "fsm.reference_path_min_distance", 0.5);
+    reference_path_simplify_tolerance_ =
+        load_parameter<double>(node_, "fsm.reference_path_simplify_tolerance", 0.0);
     self_inflation_frame_id_ = load_parameter<std::string>(node_, "grid_map.frame_id", "world");
 
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
@@ -91,7 +95,8 @@ namespace scan_planner
           std::bind(&SCANReplanFSM::rvizGoalCallback, this, std::placeholders::_1));
     else if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
       path_sub_ = node_->create_subscription<nav_msgs::msg::Path>(
-          "initial_path", 1, std::bind(&SCANReplanFSM::pathCallback, this, std::placeholders::_1));
+          "initial_path", rclcpp::QoS(1).reliable().transient_local(),
+          std::bind(&SCANReplanFSM::pathCallback, this, std::placeholders::_1));
     else if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
       RCLCPP_INFO(node_->get_logger(), "Preset waypoint mode will start after the first odometry message");
     else
@@ -357,11 +362,17 @@ namespace scan_planner
 
     std::vector<Eigen::Vector3d> waypoints;
     std::string path_error;
-    if (!prepareReferenceWaypoints(*msg, body_height_, 0.5, waypoints, &path_error))
+    if (!prepareReferenceWaypoints(*msg, body_height_, reference_path_min_distance_,
+                                   waypoints, &path_error,
+                                   reference_path_simplify_tolerance_))
     {
       RCLCPP_WARN(node_->get_logger(), "Ignoring initial_path: %s", path_error.c_str());
       return;
     }
+
+    RCLCPP_INFO(node_->get_logger(),
+                "Reference path reduced from %zu poses to %zu trajectory waypoints",
+                msg->poses.size(), waypoints.size());
 
     trigger_ = true;
     end_pt_ = waypoints.back();
@@ -642,6 +653,24 @@ namespace scan_planner
       /* && (end_pt_ - pos).norm() < 0.5 */
       if (t_cur > info->duration_ - 1e-2)
       {
+        const auto &global_data = planner_manager_->global_data_;
+        const bool reference_path_has_next_window =
+            navi_mode_ == NAVI_MODE::REFERENCE_PATH &&
+            global_data.last_progress_time_ < global_data.global_duration_ - 1e-3;
+
+        // In reference-path mode, a local B-spline covers only one planning
+        // horizon.  Finishing that spline does not mean that the complete PCT
+        // route has been reached: request the next local window and keep the
+        // global target active.
+        if (reference_path_has_next_window)
+        {
+          RCLCPP_INFO(node_->get_logger(),
+                      "Local reference window complete (%.2f/%.2fs); continuing along the global path",
+                      global_data.last_progress_time_, global_data.global_duration_);
+          changeFSMExecState(REPLAN_TRAJ, "FSM");
+          return;
+        }
+
         if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
         {
           current_wp_++;

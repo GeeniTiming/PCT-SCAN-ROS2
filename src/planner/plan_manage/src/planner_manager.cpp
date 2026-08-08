@@ -1,5 +1,6 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
+#include <plan_manage/polyline_trajectory_utils.h>
 #include <chrono>
 #include <thread>
 
@@ -330,78 +331,24 @@ namespace scan_planner
   bool SCANPlannerManager::planGlobalTrajWaypoints(const Eigen::Vector3d &start_pos, const Eigen::Vector3d &start_vel, const Eigen::Vector3d &start_acc,
                                                   const std::vector<Eigen::Vector3d> &waypoints, const Eigen::Vector3d &end_vel, const Eigen::Vector3d &end_acc)
   {
-
-    // generate global reference trajectory
-
     if (waypoints.empty())
       return false;
 
     vector<Eigen::Vector3d> points;
     points.push_back(start_pos);
-
-    for (size_t wp_i = 0; wp_i < waypoints.size(); wp_i++)
-    {
-      points.push_back(waypoints[wp_i]);
-    }
-
-    double total_len = 0;
-    for (size_t i = 0; i < points.size() - 1; i++)
-    {
-      total_len += (points[i + 1] - points[i]).norm();
-    }
-
-    // insert intermediate points if too far
-    vector<Eigen::Vector3d> inter_points;
-    double dist_thresh = max(total_len / 8, 4.0);
-
-    for (size_t i = 0; i < points.size() - 1; ++i)
-    {
-      inter_points.push_back(points.at(i));
-      double dist = (points.at(i + 1) - points.at(i)).norm();
-
-      if (dist > dist_thresh)
-      {
-        int id_num = floor(dist / dist_thresh) + 1;
-
-        for (int j = 1; j < id_num; ++j)
-        {
-          Eigen::Vector3d inter_pt =
-              points.at(i) * (1.0 - double(j) / id_num) + points.at(i + 1) * double(j) / id_num;
-          inter_points.push_back(inter_pt);
-        }
-      }
-    }
-
-    inter_points.push_back(points.back());
-
-    // for ( int i=0; i<inter_points.size(); i++ )
-    // {
-    //   cout << inter_points[i].transpose() << endl;
-    // }
-
-    // write position matrix
-    int pt_num = inter_points.size();
-    Eigen::MatrixXd pos(3, pt_num);
-    for (int i = 0; i < pt_num; ++i)
-      pos.col(i) = inter_points[i];
-
-    Eigen::Vector3d zero(0, 0, 0);
-    Eigen::VectorXd time(pt_num - 1);
-    for (int i = 0; i < pt_num - 1; ++i)
-    {
-      time(i) = (pos.col(i + 1) - pos.col(i)).norm() / (pp_.max_vel_);
-    }
-
-    time(0) *= 2.0;
-    time(time.rows() - 1) *= 2.0;
-
+    points.insert(points.end(), waypoints.begin(), waypoints.end());
     PolynomialTraj gl_traj;
-    if (pos.cols() >= 3)
-      gl_traj = PolynomialTraj::minSnapTraj(pos, start_vel, end_vel, start_acc, end_acc, time);
-    else if (pos.cols() == 2)
-      gl_traj = PolynomialTraj::one_segment_traj_gen(start_pos, start_vel, start_acc, pos.col(1), end_vel, end_acc, time(0));
-    else
+    std::string error;
+    if (!makePiecewiseLinearTrajectory(points, pp_.max_vel_, gl_traj, &error))
+    {
+      RCLCPP_ERROR(node_->get_logger(), "Unable to build polyline reference trajectory: %s", error.c_str());
       return false;
+    }
+
+    (void)start_vel;
+    (void)start_acc;
+    (void)end_vel;
+    (void)end_acc;
 
     auto time_now = node_->now();
     global_data_.setGlobalTraj(gl_traj, time_now);
