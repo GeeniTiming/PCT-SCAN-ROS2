@@ -1,12 +1,8 @@
 # PCT-SCAN-ROS2
 
-PCT-SCAN-ROS2 把 PCT 的跨层全局搜索接到 SCAN 的局部轨迹规划器上，用 ROS 2
-Humble 运行。PCT 负责在 tomogram 中选择楼层、楼梯和坡道，SCAN 沿全局路线持续
-生成局部 B-spline。RViz 同时显示点云、路线和 Go2 动画。
+PCT-SCAN-ROS2 将 PCT 的跨层全局规划器与 SCAN 的局部轨迹规划器几何，用 ROS 2 Humble 运行。PCT 负责在 tomogram 层析图中选择楼层、楼梯和坡道，SCAN 沿全局路线持续生成局部 B-spline。RViz 同时显示点云、路线和 Go2 运动动画。
 
-这个仓库用于规划算法演示和视频录制，不运行 Gazebo 接触物理，也没有假装验证
-足端落脚或真机低层策略。起点和终点由 RViz Interactive Marker 控制，Z 轴可以
-直接选择目标楼层。
+本仓库仅用于验证PCT+SCAN导航算法，起点和终点由 RViz Interactive Marker 控制，Z 轴可以直接选择目标楼层。
 
 <p align="center">
   <img src="assets/images/building.png" alt="PCT-SCAN-ROS2 Building 跨层导航效果" width="92%">
@@ -25,22 +21,17 @@ flowchart LR
   BS --> GO2[Go2 RViz 动画]
 ```
 
-PCT 提供跨楼层的全局拓扑与路线约束；SCAN 保留其滑动地图、碰撞建模、A* 引导和
+PCT 提供跨楼层的全局拓扑与路线约束；SCAN 保留其滑动地图、碰撞建模、A\* 引导和
 轨迹优化能力，在全局路线的局部窗口内持续重规划。本工程通过 `/pct_path` 将 PCT
 的全局结果接入 SCAN Mode 3。
 
 ## 已验证场景
 
-| 场景 | 默认路线 | 验证结果 | 启动命令 |
-|---|---:|---|---|
-| Building | 地面至上层，约 14 m 高差 | PCT 跨层 A* + SCAN 连续跟踪 | `./scripts/launch_pct_scan_building.sh` |
-| Plaza | 37.12 m | PCT A*；SCAN 进入持续重规划 | `./scripts/launch_pct_scan_plaza.sh` |
-| Spiral | 38.30 m、3.80 m 爬升、2 层 | PCT A*；SCAN 连续 5 个以上窗口 | `./scripts/launch_pct_scan_spiral.sh` |
-
-Plaza 与 Spiral 使用基于 tomogram 距离变换的软中线代价，默认路线的 5% 分位净空
-分别为 0.42 m 和 0.40 m。它只影响 A* 在多个可行解之间的选择，不改变 PCT 的
-`cost <= 20` 可通行判定。Building、Plaza、Spiral 是 PCT 论文/官方仓库列出的三种
-场景。RMUC 是 ROS 2 分支后来添加的配置，不在当前稳定演示范围内。
+| 场景     |                   默认路线 | 验证结果                        | 启动命令                                |
+| -------- | -------------------------: | ------------------------------- | --------------------------------------- |
+| Building |   地面至上层，约 14 m 高差 | PCT 跨层 A\* + SCAN 连续跟踪    | `./scripts/launch_pct_scan_building.sh` |
+| Plaza    |                    37.12 m | PCT A\*；SCAN 进入持续重规划    | `./scripts/launch_pct_scan_plaza.sh`    |
+| Spiral   | 38.30 m、3.80 m 爬升、2 层 | PCT A\*；SCAN 连续 5 个以上窗口 | `./scripts/launch_pct_scan_spiral.sh`   |
 
 ### Plaza 与 Spiral
 
