@@ -139,7 +139,8 @@ def main():
         recorder.get_logger().error(str(error))
     finally:
         recorder.destroy_node()
-        rclpy.try_shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

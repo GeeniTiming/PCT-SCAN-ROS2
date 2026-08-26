@@ -7,6 +7,7 @@ DEPS_ROOT="${PCT_DEPS_ROOT:-$PROJECT_ROOT/.deps/install}"
 SOURCE_ROOT="$PROJECT_ROOT/.deps/src"
 BUILD_ROOT="$PROJECT_ROOT/.deps/build"
 JOBS="${PCT_BUILD_JOBS:-2}"
+TARGET_ARCH="$(uname -m)"
 
 command -v git >/dev/null
 command -v cmake >/dev/null
@@ -33,15 +34,17 @@ cmake -S "$SOURCE_ROOT/gtsam-4.2" -B "$BUILD_ROOT/gtsam-4.2" -GNinja \
   -DGTSAM_BUILD_TESTS=OFF \
   -DGTSAM_BUILD_EXAMPLES_ALWAYS=OFF \
   -DGTSAM_BUILD_UNSTABLE=OFF \
-  -DGTSAM_BUILD_PYTHON=OFF
+  -DGTSAM_BUILD_PYTHON=OFF \
+  -DGTSAM_BUILD_WITH_MARCH_NATIVE=OFF \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 cmake --build "$BUILD_ROOT/gtsam-4.2" --parallel "$JOBS"
 cmake --install "$BUILD_ROOT/gtsam-4.2"
 
 cmake -S "$SOURCE_ROOT/osqp-1.0.0" -B "$BUILD_ROOT/osqp-1.0.0" -GNinja \
   -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_INSTALL_PREFIX="$DEPS_ROOT/osqp-1.0.0"
+  -DCMAKE_INSTALL_PREFIX="$DEPS_ROOT/osqp-1.0.0" \
+  -DCMAKE_POSITION_INDEPENDENT_CODE=ON
 cmake --build "$BUILD_ROOT/osqp-1.0.0" --parallel "$JOBS"
 cmake --install "$BUILD_ROOT/osqp-1.0.0"
 
-echo "[pct-scan] Dependencies installed under $DEPS_ROOT"
-
+echo "[pct-scan] Dependencies for $TARGET_ARCH installed under $DEPS_ROOT"

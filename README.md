@@ -1,6 +1,8 @@
 # PCT-SCAN-ROS2
 
-PCT-SCAN-ROS2 将 PCT 的跨层全局规划器与 SCAN 的局部轨迹规划器几何，用 ROS 2 Humble 运行。PCT 负责在 tomogram 层析图中选择楼层、楼梯和坡道，SCAN 沿全局路线持续生成局部 B-spline。RViz 同时显示点云、路线和 Go2 运动动画。
+PCT-SCAN-ROS2 将 PCT 的跨层全局规划器与 SCAN 的局部轨迹规划器结合，可在 ROS 2
+Foxy 或 Humble 上运行。PCT 负责在 tomogram 层析图中选择楼层、楼梯和坡道，SCAN
+沿全局路线持续生成局部 B-spline。RViz 同时显示点云、路线和 Go2 运动动画。
 
 本仓库仅用于验证PCT+SCAN导航算法，起点和终点由 RViz Interactive Marker 控制，Z 轴可以直接选择目标楼层。
 
@@ -50,16 +52,16 @@ PCT 提供跨楼层的全局拓扑与路线约束；SCAN 保留其滑动地图�
 
 ## 环境要求
 
-当前代码针对下面这套环境整理：
+当前兼容目标：
 
-- Ubuntu 22.04
-- ROS 2 Humble
-- Python 3.10
-- GCC 11 或兼容的 C++17 编译器
+- Ubuntu 20.04 + ROS 2 Foxy + Python 3.8（RK3588/aarch64）
+- Ubuntu 22.04 + ROS 2 Humble + Python 3.10（开发工作站）
+- GCC 9 或更高版本的 C++17 编译器
 - RViz2
 
-Building 和 Plaza 不需要 CUDA。Spiral 的 tomogram 生成器会先检查 CUDA，GPU 不可用
-时改用 NumPy 和 SciPy。运行导航演示本身不需要 NVIDIA 显卡。
+RK3588 路径完全不依赖 CUDA、CuPy 或 Open3D。tomography ROS 节点使用 NumPy CPU
+后端，并能直接读取 PCL 常见的 ASCII/普通 binary PCD。板端构建和限制见
+[`docs/foxy_rk3588.md`](docs/foxy_rk3588.md)。
 
 ## 安装与环境部署
 
@@ -70,8 +72,8 @@ git clone https://github.com/yagami-light7/PCT-SCAN-ROS2.git
 cd PCT-SCAN-ROS2
 ```
 
-如果系统还没有 ROS 2 Humble，请先按照 ROS 2 官方文档完成桌面版安装。下面的命令
-默认 `/opt/ros/humble/setup.bash` 已经存在。
+构建脚本默认使用 `/opt/ros/foxy/setup.bash`。在 Humble 工作站上设置
+`PCT_ROS_DISTRO=humble`。
 
 ### 2. 安装 ROS 和系统依赖
 
@@ -96,7 +98,7 @@ rosdep update
 各 ROS package 声明的依赖：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
@@ -118,7 +120,7 @@ PCT_BUILD_JOBS=6 ./scripts/setup_pct_dependencies.sh
 ### 4. 构建工作空间
 
 ```bash
-./scripts/build_workspace.sh
+PCT_ROS_DISTRO=foxy ./scripts/build_workspace.sh
 source install/setup.bash
 ```
 
@@ -138,7 +140,7 @@ PCT_DEPS_ROOT=/path/to/deps ./scripts/build_workspace.sh
 先确认 ROS 能找到两个核心包：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source install/setup.bash
 ros2 pkg prefix pct_scan_bridge
 ros2 pkg prefix scan_planner

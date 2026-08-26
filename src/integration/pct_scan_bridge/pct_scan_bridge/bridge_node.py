@@ -156,4 +156,6 @@ def main(args=None):
         pass
     finally:
         node.destroy_node()
-        upstream_planner_node.rclpy.try_shutdown()
+        # rclpy.try_shutdown() is not available in ROS 2 Foxy.
+        if upstream_planner_node.rclpy.ok():
+            upstream_planner_node.rclpy.shutdown()

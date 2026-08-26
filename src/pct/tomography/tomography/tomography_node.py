@@ -1,26 +1,17 @@
 #!/usr/bin/python3
-"""PCT tomography ROS 2 node.
-
-Modified for ROS 2 Humble and relocatable resources in 2026.
-"""
+"""CPU PCT tomography node for ROS 2 Foxy/Humble and ARM64."""
 
 # import argparse
 import os
-import sys
-import pathlib
 import time
 import pickle
-from typing import Optional
 import numpy as np
-import open3d as o3d
 import importlib
 
   
 import rclpy
 from rclpy.node import Node
-from rclpy.clock import Clock
-from rclpy.time import Time
-from rclpy.qos import QoSProfile, QoSHistoryPolicy, QoSReliabilityPolicy, QoSDurabilityPolicy
+from rclpy.qos import QoSProfile, QoSReliabilityPolicy, QoSDurabilityPolicy
 
 from std_msgs.msg import Header
 from sensor_msgs.msg import PointCloud2
@@ -28,6 +19,7 @@ import sensor_msgs_py.point_cloud2 as pc2
 
 
 from .tomogram import Tomogram
+from .pcd_io import read_point_cloud_xyz
 
 # equal sys.path.append("../")
 # parent_dir = pathlib.Path(__file__).resolve().parent
@@ -45,15 +37,17 @@ class Tomography(Node):
     def __init__(self, cfg: Config):
         super().__init__('pointcloud_tomography')
 
-        self.declare_parameter("rsg_root", None)
+        self.declare_parameter("rsg_root", "")
         rsg_root_param = self.get_parameter("rsg_root")
-        self.declare_parameter("scene_name", None)
+        self.declare_parameter("scene_name", "")
         scene_name_param = self.get_parameter("scene_name")
+        self.declare_parameter("pcd_path", "")
+        self.declare_parameter("benchmark_repeats", 1)
 
-        if rsg_root_param.value is None:
+        if not rsg_root_param.value:
             raise ValueError("Missing required parameter: rsg_root")
         
-        if scene_name_param.value is None:
+        if not scene_name_param.value:
             raise ValueError("Missing required parameter: scene_name")
         
         self.rsg_root = rsg_root_param.get_parameter_value().string_value
@@ -81,8 +75,12 @@ class Tomography(Node):
             durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
         )
 
-        self.export_dir = self.rsg_root + cfg.map.export_dir
-        self.pcd_file = scene_cfg.pcd.file_name
+        self.export_dir = os.path.join(
+            self.rsg_root, cfg.map.export_dir.strip("/"))
+        pcd_path = self.get_parameter("pcd_path").value
+        self.pcd_file = pcd_path if pcd_path else scene_cfg.pcd.file_name
+        self.benchmark_repeats = max(
+            1, int(self.get_parameter("benchmark_repeats").value))
         self.resolution = scene_cfg.map.resolution
         self.ground_h = scene_cfg.map.ground_h
         self.slice_dh = scene_cfg.map.slice_dh
@@ -121,14 +119,13 @@ class Tomography(Node):
         self.tomogram_pub = self.create_publisher(PointCloud2, tomogram_topic, self.qos)
 
     def loadPCD(self):
-        pcd = o3d.io.read_point_cloud(f"{self.rsg_root}/pcd/{self.pcd_file}")
-        points = np.asarray(pcd.points).astype(np.float32)
+        pcd_path = self.pcd_file
+        if not os.path.isabs(pcd_path):
+            pcd_path = os.path.join(self.rsg_root, "pcd", pcd_path)
+        points = read_point_cloud_xyz(pcd_path)
 
         self.get_logger().info(f"PCD points: {points.shape[0]}")
 
-        if points.shape[1] > 3:
-            points = points[:, :3]
-        
         self.points_max = np.max(points, axis=0)
         self.points_min = np.min(points, axis=0)           
         self.points_min[-1] = self.ground_h
@@ -154,14 +151,10 @@ class Tomography(Node):
         t_trav = 0.0
         t_simp = 0.0
         t_all = 0.0
-        n_repeat = 10
+        n_repeat = self.benchmark_repeats
 
-        """ 
-        GPU time benchmark, where CUDA events are synchronized for correct time measurement.
-        The function is repeatedly run for n_repeat times to calculate the average processing time of each modules.
-        The time of the first warm-up run is excluded to reduce timing fluctuation and exclude the overhead in initial invocations.
-        See https://docs.cupy.dev/en/stable/user_guide/performance.html for more details
-        """
+        # One warm-up pass plus an optional small number of benchmark passes.
+        # The default is one to keep startup cost bounded on RK3588.
         for i in range(n_repeat + 1):
             t_start = time.time()
             layers_t, trav_grad_x, trav_grad_y, layers_g, layers_c, t_gpu = self.tomogram.point2map(points)
@@ -181,7 +174,7 @@ class Tomography(Node):
 
         self.n_slice = layers_g.shape[0]
         
-        map_file = os.path.splitext(self.pcd_file)[0]
+        map_file = os.path.splitext(os.path.basename(self.pcd_file))[0]
 
         self.exportTomogram(np.stack((layers_t, trav_grad_x, trav_grad_y, layers_g, layers_c)), map_file)
 
@@ -200,10 +193,12 @@ class Tomography(Node):
             'slice_dh': self.slice_dh,
         }
         file_name = map_file + '.pickle'
-        with open(self.export_dir + file_name, 'wb') as handle:
+        os.makedirs(self.export_dir, exist_ok=True)
+        output_path = os.path.join(self.export_dir, file_name)
+        with open(output_path, 'wb') as handle:
             pickle.dump(data_dict, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-        self.get_logger().info(f"Tomogram exported: {file_name}")
+        self.get_logger().info(f"Tomogram exported: {output_path}")
 
     def publishPoints(self, points):
         header = Header()

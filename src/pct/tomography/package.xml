@@ -3,7 +3,7 @@
 <package format="3">
   <name>tomography</name>
   <version>0.1.0</version>
-  <description>PCT point-cloud tomography ported to ROS 2 Humble.</description>
+  <description>CPU PCT point-cloud tomography for ROS 2 Foxy and Humble.</description>
   <maintainer email="1523924956@qq.com">alex</maintainer>
   <license>GPL-2.0-or-later</license>
 

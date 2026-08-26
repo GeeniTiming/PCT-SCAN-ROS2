@@ -3,7 +3,7 @@
 <package format="3">
   <name>pct_planner</name>
   <version>0.1.0</version>
-  <description>PCT global planner ported to ROS 2 Humble for PCT-SCAN-ROS2.</description>
+  <description>PCT global planner ported to ROS 2 Foxy and Humble.</description>
   <maintainer email="1523924956@qq.com">alex</maintainer>
   <license>GPL-2.0-or-later</license>
 

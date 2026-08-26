@@ -1,3 +1,4 @@
 [build-system]
-requires = ["setuptools>=58.2.0", "wheel"]
+# Ubuntu 20.04 / ROS 2 Foxy ships setuptools 45.x.
+requires = ["setuptools>=45", "wheel"]
 build-backend = "setuptools.build_meta"

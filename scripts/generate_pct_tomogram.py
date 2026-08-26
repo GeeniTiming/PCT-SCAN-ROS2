@@ -116,22 +116,21 @@ def load_pct_runtime():
     try:
         import cupy as cp
         import numpy as np
-        import open3d as o3d
         from tomography.tomogram import Tomogram
     except ImportError as error:
         raise RuntimeError(f"missing PCT Python dependency: {error}") from error
 
-    return cp, np, o3d, Tomogram
+    return cp, np, Tomogram
 
 
 def load_cpu_runtime():
     try:
         import numpy as np
-        import open3d as o3d
         from scipy import ndimage
+        from tomography.pcd_io import read_point_cloud_xyz
     except ImportError as error:
         raise RuntimeError(f"missing CPU tomography dependency: {error}") from error
-    return np, o3d, ndimage
+    return np, read_point_cloud_xyz, ndimage
 
 
 def _round_like_c(values, np):
@@ -325,7 +324,7 @@ def main() -> int:
 
     try:
         config = make_config(args)
-        np, o3d, ndimage = load_cpu_runtime()
+        np, read_point_cloud_xyz, ndimage = load_cpu_runtime()
     except (ValueError, RuntimeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 3
@@ -335,7 +334,7 @@ def main() -> int:
     Tomogram = None
     if backend in ("auto", "cuda"):
         try:
-            cp, _, _, Tomogram = load_pct_runtime()
+            cp, _, Tomogram = load_pct_runtime()
             cp.cuda.runtime.memGetInfo()
             backend = "cuda"
         except Exception as error:  # CuPy raises backend-specific runtime errors.
@@ -351,8 +350,7 @@ def main() -> int:
     print(f"[tomogram] slice height:{config.map.slice_dh:>7.3f} m")
     print(f"[tomogram] backend:      {backend}")
 
-    cloud = o3d.io.read_point_cloud(str(source), print_progress=True)
-    points = np.asarray(cloud.points).astype(np.float32)
+    points = read_point_cloud_xyz(str(source))
     if points.size == 0:
         print("error: Open3D loaded an empty point cloud", file=sys.stderr)
         return 4

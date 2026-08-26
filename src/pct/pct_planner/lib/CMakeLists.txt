@@ -4,6 +4,10 @@ project(planning_core CXX)
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED true)
 
+if(NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64)$")
+  message(STATUS "PCT planning core target architecture: ${CMAKE_SYSTEM_PROCESSOR}")
+endif()
+
 if(NOT CMAKE_BUILD_TYPE)
   set(CMAKE_BUILD_TYPE Release)
 endif()
@@ -11,7 +15,8 @@ endif()
 set(CMAKE_CXX_FLAGS "-Wall -Wextra")
 set(CMAKE_CXX_FLAGS_DEBUG "-g")
 set(CMAKE_CXX_FLAGS_RELEASE "-O2")
-# set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -march=native") # have to enable because of gtsam
+# Never add -march=native here. It can select x86 instructions on a build host
+# and also makes ARM64 artifacts non-portable across RK3588 CPU clusters.
 
 find_package(GTSAM REQUIRED)
 find_package(Eigen3 REQUIRED)

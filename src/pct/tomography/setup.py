@@ -19,7 +19,7 @@ setup(
     zip_safe=True,
     maintainer='alex',
     maintainer_email='1523924956@qq.com',
-    description='PCT point-cloud tomography ported to ROS 2 Humble',
+    description='CPU point-cloud tomography for ROS 2 Foxy and Humble',
     license='GPL-2.0-or-later',
     extras_require={
         'test': [
