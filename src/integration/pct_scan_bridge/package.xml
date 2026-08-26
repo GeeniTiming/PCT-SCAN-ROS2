@@ -8,11 +8,8 @@
   <!-- This bridge imports and subclasses the GPL-licensed PCT planner. -->
   <license>GPL-2.0-or-later</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
-
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>go2_description</exec_depend>
   <exec_depend>interactive_markers</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
@@ -24,8 +21,6 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
-  <exec_depend>xacro</exec_depend>
-
   <test_depend>python3-pytest</test_depend>
 
   <export>

@@ -8,12 +8,10 @@ fi
 
 PCT_SCAN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PCT_SCAN_PROJECT_ROOT="$(cd "$PCT_SCAN_SCRIPT_DIR/.." && pwd -P)"
-PCT_ROS_DISTRO="${PCT_ROS_DISTRO:-${ROS_DISTRO:-foxy}}"
-PCT_ROS_SETUP="/opt/ros/$PCT_ROS_DISTRO/setup.bash"
+PCT_ROS_SETUP="/opt/ros/foxy/setup.bash"
 
 if [[ ! -f "$PCT_ROS_SETUP" ]]; then
-  echo "[pct-scan] ROS 2 was not found at /opt/ros/$PCT_ROS_DISTRO." >&2
-  echo "[pct-scan] Set PCT_ROS_DISTRO when not using Foxy." >&2
+  echo "[pct-scan] ROS 2 Foxy was not found at /opt/ros/foxy." >&2
   return 2
 fi
 if [[ ! -f "$PCT_SCAN_PROJECT_ROOT/install/setup.bash" ]]; then
@@ -24,6 +22,13 @@ fi
 # Generated ROS setup files legitimately inspect optional unset variables.
 set +u
 source "$PCT_ROS_SETUP"
+if [[ "${ROS_DISTRO:-}" != "foxy" ]]; then
+  echo "[pct-scan] Expected ROS 2 Foxy, found ROS_DISTRO=${ROS_DISTRO:-unset}." >&2
+  return 2
+fi
+if ! "$PCT_SCAN_SCRIPT_DIR/verify_m20pro_baseline.sh" --runtime; then
+  return 2
+fi
 
 PCT_DEPS_ROOT="${PCT_DEPS_ROOT:-$PCT_SCAN_PROJECT_ROOT/.deps/install}"
 if [[ ! -f "$PCT_DEPS_ROOT/gtsam-4.2/lib/libgtsam.so.4" ]]; then

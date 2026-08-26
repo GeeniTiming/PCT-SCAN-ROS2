@@ -68,7 +68,7 @@ PCT 折线 ──RDP(0.10 m)──> 三维关键点
 另开终端观察机身高度：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 source install/setup.bash
 ros2 topic echo /quad_0/body_pose --field pose.pose.position.z
 ```

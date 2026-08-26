@@ -1,6 +1,7 @@
 # ROS 2 Foxy / RK3588 构建说明
 
-该配置面向 Ubuntu 20.04、ROS 2 Foxy、Python 3.8 和 aarch64。PCT、SCAN、
+该配置面向 Ubuntu 20.04、系统 CMake 3.16.3、ROS 2 Foxy、Python 3.8 和
+aarch64。PCT、SCAN、
 tomography 都在 RK3588 上运行，不要求在 x86 主机预生成 tomogram。
 
 ## 设计约束
@@ -10,6 +11,8 @@ tomography 都在 RK3588 上运行，不要求在 x86 主机预生成 tomogram�
 - `binary_compressed` 地图需要先通过 PCL 转存为普通 binary。
 - GTSAM、OSQP 和 pybind11 扩展必须在 RK3588 本机或 aarch64 sysroot 中构建；禁止
   从 x86 工作站复制 `.so`。
+- OSQP 1.0 使用仓库维护的 CMake 3.16 兼容补丁；不要为了构建它替换 Ubuntu 系统
+  CMake。
 - 构建显式关闭 `-march=native`，避免大小核之间产生不可移植指令。
 - `src/simulator` 带有 `COLCON_IGNORE`，避免板端编译 Go2、OpenGL、RViz 和仿真地图
   工具；这些组件不是实机 PCT/SCAN 数据链的一部分。
@@ -20,15 +23,18 @@ tomography 都在 RK3588 上运行，不要求在 x86 主机预生成 tomogram�
 source /opt/ros/foxy/setup.bash
 sudo apt update
 sudo apt install -y \
-  build-essential cmake ninja-build git \
+  build-essential cmake ninja-build git curl \
   python3-colcon-common-extensions python3-rosdep python3-dev \
   python3-numpy python3-scipy \
-  libboost-all-dev libeigen3-dev libarmadillo-dev \
-  libglew-dev libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev
+  libboost-all-dev libeigen3-dev libopencv-dev libpcl-dev \
+  ros-foxy-pcl-conversions ros-foxy-cv-bridge \
+  ros-foxy-message-filters ros-foxy-tf2-geometry-msgs \
+  ros-foxy-interactive-markers ros-foxy-sensor-msgs-py \
+  ros-foxy-pybind11-vendor
 
-rosdep install --from-paths src --ignore-src -r -y --rosdistro foxy
+./scripts/verify_m20pro_baseline.sh --runtime
 PCT_BUILD_JOBS=2 ./scripts/setup_pct_dependencies.sh
-PCT_ROS_DISTRO=foxy ./scripts/build_workspace.sh
+./scripts/build_workspace.sh
 ```
 
 在内存紧张或发生编译器 OOM 时将 `PCT_BUILD_JOBS` 改为 `1`。依赖输出目录包含架构

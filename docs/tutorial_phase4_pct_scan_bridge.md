@@ -28,7 +28,7 @@ planner。这个修正同时适用于 Building、Plaza 和 Spiral。
 在仓库根目录构建桥接包：
 
 ```bash
-source /opt/ros/humble/setup.bash
+source /opt/ros/foxy/setup.bash
 ./scripts/build_workspace.sh --packages-select pct_scan_bridge scan_planner
 ```
 
@@ -70,7 +70,7 @@ B-spline 完成。
 
 脚本自动完成以下工作：
 
-- source ROS 2 Humble 和本工程 overlay；
+- source ROS 2 Foxy 和本工程 overlay；
 - 补充 GTSAM 与 OSQP 的运行库路径；
 - 加载 Building PCD 和 tomogram；
 - 启动 PCT 交互路点、SCAN Mode 3、运动学机器人和 RViz。

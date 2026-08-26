@@ -1,6 +1,6 @@
 """PCT ROS node.
 
-Modified for ROS 2 Humble and PCT-SCAN-ROS2 in 2026; see ``src/pct/NOTICE``.
+Modified for ROS 2 Foxy and PCT-SCAN-ROS2 in 2026; see ``src/pct/NOTICE``.
 """
 
 import numpy as np

@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         choices=("auto", "cuda", "cpu"),
-        default="auto",
-        help="tomography backend; auto uses CUDA when available and otherwise CPU",
+        default="cpu",
+        help="tomography backend; M20Pro deployments use the default CPU backend",
     )
     parser.add_argument(
         "--force", action="store_true", help="replace an existing output pickle"
@@ -352,7 +352,7 @@ def main() -> int:
 
     points = read_point_cloud_xyz(str(source))
     if points.size == 0:
-        print("error: Open3D loaded an empty point cloud", file=sys.stderr)
+        print("error: the PCD reader loaded an empty point cloud", file=sys.stderr)
         return 4
     points = points[~np.isnan(points).any(axis=1)]
 
