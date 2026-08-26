@@ -1,5 +1,17 @@
 import string
-import cupy as cp
+try:
+    import cupy as cp
+    _CUPY_IMPORT_ERROR = None
+except ImportError as error:  # Optional desktop CUDA acceleration.
+    cp = None
+    _CUPY_IMPORT_ERROR = error
+
+
+def _require_cupy():
+    if cp is None:
+        raise RuntimeError(
+            "CuPy/CUDA is unavailable; use the NumPy CPU tomography backend"
+        ) from _CUPY_IMPORT_ERROR
 
 
 def utils_point(resolution, n_row, n_col):
@@ -97,6 +109,7 @@ def utils_map(n_row, n_col):
 
 
 def tomographyKernel(resolution, n_row, n_col, n_slice, slice_h0, slice_dh):
+    _require_cupy()
     tomography_kernel = cp.ElementwiseKernel(
         in_params='raw U points, raw U center',
         out_params='raw U layers_g, raw U layers_c',
@@ -134,6 +147,7 @@ def travKernel(
     n_row, n_col, half_kernel_size,
     interval_min, interval_free, step_cross, step_stand, standable_th, cost_barrier
     ):
+    _require_cupy()
     trav_kernel = cp.ElementwiseKernel(
         in_params='raw U interval, raw U grad_mag_sq, raw U grad_mag_max',
         out_params='raw U trav_cost',
@@ -199,6 +213,7 @@ def travKernel(
 
 
 def inflationKernel(n_row, n_col, half_kernel_size):
+    _require_cupy()
     inflation_kernel = cp.ElementwiseKernel(
         in_params='raw U trav_cost, raw U score_table',
         out_params='raw U inflated_cost',
