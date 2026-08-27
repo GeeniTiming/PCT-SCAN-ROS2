@@ -87,7 +87,7 @@ sudo apt install -y \
   ros-foxy-pcl-conversions ros-foxy-cv-bridge \
   ros-foxy-message-filters ros-foxy-tf2-geometry-msgs \
   ros-foxy-interactive-markers ros-foxy-sensor-msgs-py \
-  ros-foxy-pybind11-vendor
+  ros-foxy-rclpy
 ```
 
 `src/simulator` 在板端被 `COLCON_IGNORE` 排除，因此不需要安装 Armadillo、GLEW、
@@ -103,10 +103,11 @@ source /opt/ros/foxy/setup.bash
 
 ### 3. 编译 PCT 原生依赖
 
-PCT 使用固定提交的 GTSAM 4.2 和 OSQP 1.0。仓库脚本会下载源码并安装到
+PCT 使用固定提交的 GTSAM 4.2、OSQP 1.0 和 pybind11 2.10.4。仓库脚本会下载源码并安装到
 `.deps/install`，不会改动 `/usr/local`，也不需要再 source 另一个 PCT 工作空间。
 OSQP 带有仓库维护的 CMake 3.16 兼容补丁，已经使用 Ubuntu 20.04 的 CMake 3.16.3
 验证；不需要升级系统 CMake。
+pybind11 同样使用私有安装，不依赖 M20Pro 固件是否提供 `pybind11_vendor`。
 
 构建脚本默认执行严格的 M20Pro 环境检查。只有在 CI 容器或配置了 aarch64 sysroot
 的交叉编译环境中，才可以显式设置 `PCT_ALLOW_NON_M20_HOST=1` 跳过宿主操作系统和

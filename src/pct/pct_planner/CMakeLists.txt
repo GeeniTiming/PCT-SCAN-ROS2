@@ -3,10 +3,9 @@ project(pct_planner)
 
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
-find_package(pybind11_vendor REQUIRED)
-find_package(pybind11 REQUIRED)
-
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+set(PYBIND11_FINDPYTHON ON)
+find_package(pybind11 2.10.4 CONFIG REQUIRED)
 
 execute_process(
   COMMAND "${Python3_EXECUTABLE}" -c "import sysconfig; print(sysconfig.get_path('platlib', vars={'platbase': '.', 'base': '.'}))"

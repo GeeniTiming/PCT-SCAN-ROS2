@@ -27,9 +27,6 @@ include_directories(
   ${GTSAM_INCLUDE_DIR}
 )
 
-find_package(pybind11_vendor REQUIRED)
-find_package(pybind11 REQUIRED)
-
 set(CMAKE_INSTALL_RPATH "$ORIGIN")
 set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
 

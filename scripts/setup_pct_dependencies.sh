@@ -15,6 +15,8 @@ GTSAM_COMMIT="4f66a491ffc83cf092d0d818b11dc35135521612"
 OSQP_VERSION="1.0.0"
 OSQP_COMMIT="236713ce9a56c182ac3230d52108f952afce1523"
 OSQP_PATCH="$PROJECT_ROOT/patches/osqp-v1.0.0-cmake-3.16.patch"
+PYBIND11_VERSION="2.10.4"
+PYBIND11_COMMIT="5b0a6fc2017fcc176545afe3e09c9f9885283242"
 MINIMUM_CMAKE_VERSION="3.16"
 
 command -v git >/dev/null
@@ -74,10 +76,21 @@ clone_if_missing "$SOURCE_ROOT/gtsam-$GTSAM_VERSION" \
   --branch "$GTSAM_VERSION" https://github.com/borglab/gtsam.git
 clone_if_missing "$SOURCE_ROOT/osqp-$OSQP_VERSION" \
   --branch "v$OSQP_VERSION" https://github.com/osqp/osqp.git
+clone_if_missing "$SOURCE_ROOT/pybind11-$PYBIND11_VERSION" \
+  --branch "v$PYBIND11_VERSION" https://github.com/pybind/pybind11.git
 
 verify_revision "$SOURCE_ROOT/gtsam-$GTSAM_VERSION" "GTSAM $GTSAM_VERSION" "$GTSAM_COMMIT"
 verify_revision "$SOURCE_ROOT/osqp-$OSQP_VERSION" "OSQP $OSQP_VERSION" "$OSQP_COMMIT"
+verify_revision "$SOURCE_ROOT/pybind11-$PYBIND11_VERSION" "pybind11 $PYBIND11_VERSION" "$PYBIND11_COMMIT"
 apply_patch_once "$SOURCE_ROOT/osqp-$OSQP_VERSION" "$OSQP_PATCH"
+
+"$CMAKE_COMMAND" -S "$SOURCE_ROOT/pybind11-$PYBIND11_VERSION" -B "$BUILD_ROOT/pybind11-$PYBIND11_VERSION" -GNinja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX="$DEPS_ROOT/pybind11-$PYBIND11_VERSION" \
+  -DPYBIND11_INSTALL=ON \
+  -DPYBIND11_TEST=OFF
+"$CMAKE_COMMAND" --build "$BUILD_ROOT/pybind11-$PYBIND11_VERSION" --parallel "$JOBS"
+"$CMAKE_COMMAND" --install "$BUILD_ROOT/pybind11-$PYBIND11_VERSION"
 
 "$CMAKE_COMMAND" -S "$SOURCE_ROOT/gtsam-$GTSAM_VERSION" -B "$BUILD_ROOT/gtsam-$GTSAM_VERSION" -GNinja \
   -DCMAKE_BUILD_TYPE=Release \

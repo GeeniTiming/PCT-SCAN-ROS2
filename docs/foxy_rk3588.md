@@ -30,7 +30,7 @@ sudo apt install -y \
   ros-foxy-pcl-conversions ros-foxy-cv-bridge \
   ros-foxy-message-filters ros-foxy-tf2-geometry-msgs \
   ros-foxy-interactive-markers ros-foxy-sensor-msgs-py \
-  ros-foxy-pybind11-vendor
+  ros-foxy-rclpy
 
 ./scripts/verify_m20pro_baseline.sh --runtime
 PCT_BUILD_JOBS=2 ./scripts/setup_pct_dependencies.sh

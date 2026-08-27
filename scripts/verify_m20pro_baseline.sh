@@ -36,6 +36,13 @@ check_static_baseline() {
   grep -q 'cmake_minimum_required(VERSION 3.16)' \
     "$PROJECT_ROOT/patches/osqp-v1.0.0-cmake-3.16.patch" || \
     fail "OSQP CMake 3.16 compatibility patch is missing"
+  grep -q 'PYBIND11_VERSION="2.10.4"' \
+    "$PROJECT_ROOT/scripts/setup_pct_dependencies.sh" || \
+    fail "private pybind11 2.10.4 dependency pin is missing"
+  if grep -R -n 'pybind11_vendor' "$PROJECT_ROOT/src/pct" \
+      --include=CMakeLists.txt --include=package.xml >/dev/null; then
+    fail "active PCT packages still depend on ROS pybind11_vendor"
+  fi
   if grep -R -nE --exclude=verify_m20pro_baseline.sh \
       '/opt/ros/humble|ros-humble-' "$PROJECT_ROOT/scripts" >/dev/null; then
     fail "runtime scripts contain a ROS 2 Humble path or package"
