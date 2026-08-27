@@ -33,6 +33,8 @@ check_static_baseline() {
   check_cmake_files
   [[ -f "$PROJECT_ROOT/src/simulator/COLCON_IGNORE" ]] || \
     fail "src/simulator/COLCON_IGNORE is missing; board builds would include simulator dependencies"
+  [[ -f "$PROJECT_ROOT/tests/COLCON_IGNORE" ]] || \
+    fail "tests/COLCON_IGNORE is missing; board builds would discover smoke-test projects"
   grep -q 'cmake_minimum_required(VERSION 3.16)' \
     "$PROJECT_ROOT/patches/osqp-v1.0.0-cmake-3.16.patch" || \
     fail "OSQP CMake 3.16 compatibility patch is missing"
@@ -42,6 +44,11 @@ check_static_baseline() {
   if grep -R -n 'pybind11_vendor' "$PROJECT_ROOT/src/pct" \
       --include=CMakeLists.txt --include=package.xml >/dev/null; then
     fail "active PCT packages still depend on ROS pybind11_vendor"
+  fi
+  if grep -R -nE 'void[[:space:]]+[[:alnum:]_:]+Callback\(const[[:space:]]+[^)]*::ConstSharedPtr[[:space:]]*&' \
+      "$PROJECT_ROOT/src/planner" --include='*.h' --include='*.hpp' \
+      --include='*.cc' --include='*.cpp' | grep -v 'depthPoseCallback' >/dev/null; then
+    fail "direct ROS callbacks use ConstSharedPtr by reference, which is incompatible with Foxy rclcpp"
   fi
   if grep -R -nE --exclude=verify_m20pro_baseline.sh \
       '/opt/ros/humble|ros-humble-' "$PROJECT_ROOT/scripts" >/dev/null; then
