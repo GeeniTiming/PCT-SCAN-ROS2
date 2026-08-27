@@ -17,6 +17,8 @@ class DynamicLayerTomogramPlanner(TomogramPlanner):
     preferred_clearance = 0.5
     clearance_cost = 20.0
     astar_step_cost_weight = 1.0
+    gateway_cost_delta = 8.0
+    gateway_height_tolerance = 0.1
 
     def initPlanner(self, trav, trav_gx, trav_gy, elev_g, elev_c):
         if self.n_slice is None or self.n_slice <= 0:
@@ -32,12 +34,16 @@ class DynamicLayerTomogramPlanner(TomogramPlanner):
 
         gateway_up = np.zeros_like(trav, dtype=bool)
         gateway_up[:-1] = (
-            (cost_delta < -8.0) & (height_delta < 0.1) & valid_pair
+            (cost_delta < -self.gateway_cost_delta)
+            & (height_delta < self.gateway_height_tolerance)
+            & valid_pair
         )
 
         gateway_down = np.zeros_like(trav, dtype=bool)
         gateway_down[1:] = (
-            (cost_delta > 8.0) & (height_delta < 0.1) & valid_pair
+            (cost_delta > self.gateway_cost_delta)
+            & (height_delta < self.gateway_height_tolerance)
+            & valid_pair
         )
 
         gateway = np.zeros_like(trav, dtype=np.int32)

@@ -28,6 +28,8 @@ def generate_launch_description():
         DeclareLaunchArgument("preferred_clearance", default_value="0.5"),
         DeclareLaunchArgument("clearance_cost", default_value="20.0"),
         DeclareLaunchArgument("astar_step_cost_weight", default_value="1.0"),
+        DeclareLaunchArgument("gateway_cost_delta", default_value="8.0"),
+        DeclareLaunchArgument("gateway_height_tolerance", default_value="0.1"),
         DeclareLaunchArgument("tomogram_visual_min_cost", default_value="0.0"),
         DeclareLaunchArgument("tomogram_visual_max_cost", default_value="50.0"),
         DeclareLaunchArgument(
@@ -80,6 +82,10 @@ def generate_launch_description():
                 "clearance_cost": LaunchConfiguration("clearance_cost"),
                 "astar_step_cost_weight": LaunchConfiguration(
                     "astar_step_cost_weight"
+                ),
+                "gateway_cost_delta": LaunchConfiguration("gateway_cost_delta"),
+                "gateway_height_tolerance": LaunchConfiguration(
+                    "gateway_height_tolerance"
                 ),
                 "tomogram_visual_min_cost": LaunchConfiguration(
                     "tomogram_visual_min_cost"

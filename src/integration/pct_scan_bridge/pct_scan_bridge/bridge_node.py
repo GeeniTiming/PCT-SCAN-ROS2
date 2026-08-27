@@ -34,6 +34,8 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
         self.declare_parameter("preferred_clearance", 0.5)
         self.declare_parameter("clearance_cost", 20.0)
         self.declare_parameter("astar_step_cost_weight", 1.0)
+        self.declare_parameter("gateway_cost_delta", 8.0)
+        self.declare_parameter("gateway_height_tolerance", 0.1)
         self.declare_parameter("tomogram_visual_min_cost", 0.0)
         self.declare_parameter("tomogram_visual_max_cost", 50.0)
         self.tomogram_visual_min_cost = (
@@ -64,13 +66,26 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
             .get_parameter_value()
             .double_value
         )
+        DynamicLayerTomogramPlanner.gateway_cost_delta = (
+            self.get_parameter("gateway_cost_delta")
+            .get_parameter_value()
+            .double_value
+        )
+        DynamicLayerTomogramPlanner.gateway_height_tolerance = (
+            self.get_parameter("gateway_height_tolerance")
+            .get_parameter_value()
+            .double_value
+        )
         self.get_logger().info(
             "PCT A* centerline bias: "
             f"enabled={DynamicLayerTomogramPlanner.centerline_bias_enabled}, "
             f"preferred_clearance="
             f"{DynamicLayerTomogramPlanner.preferred_clearance:.2f} m, "
             f"clearance_cost={DynamicLayerTomogramPlanner.clearance_cost:.1f}, "
-            f"step_weight={DynamicLayerTomogramPlanner.astar_step_cost_weight:.1f}"
+            f"step_weight={DynamicLayerTomogramPlanner.astar_step_cost_weight:.1f}, "
+            f"gateway_cost_delta={DynamicLayerTomogramPlanner.gateway_cost_delta:.1f}, "
+            f"gateway_height_tolerance="
+            f"{DynamicLayerTomogramPlanner.gateway_height_tolerance:.2f} m"
         )
         if scene_name.lower() == "building":
             self.tomo_file = "building2_9"

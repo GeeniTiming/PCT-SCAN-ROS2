@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--preferred-clearance", type=float, default=0.5)
     parser.add_argument("--clearance-cost", type=float, default=20.0)
     parser.add_argument("--astar-step-cost-weight", type=float, default=1.0)
+    parser.add_argument("--gateway-cost-delta", type=float, default=8.0)
+    parser.add_argument("--gateway-height-tolerance", type=float, default=0.1)
     return parser.parse_args()
 
 
@@ -44,6 +46,8 @@ def main() -> int:
     planner.preferred_clearance = args.preferred_clearance
     planner.clearance_cost = args.clearance_cost
     planner.astar_step_cost_weight = args.astar_step_cost_weight
+    planner.gateway_cost_delta = args.gateway_cost_delta
+    planner.gateway_height_tolerance = args.gateway_height_tolerance
     started = time.perf_counter()
     planner.loadTomogram(tomogram_path=str(tomogram))
     load_seconds = time.perf_counter() - started
