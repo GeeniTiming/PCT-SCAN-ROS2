@@ -5,6 +5,8 @@ find_package(ament_cmake REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2 REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 
 add_executable(foxy_subscription_smoke subscription_callbacks.cpp)
 target_compile_features(foxy_subscription_smoke PRIVATE cxx_std_17)
@@ -13,4 +15,6 @@ ament_target_dependencies(
   nav_msgs
   rclcpp
   sensor_msgs
+  tf2
+  tf2_geometry_msgs
 )

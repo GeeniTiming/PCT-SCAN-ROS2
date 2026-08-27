@@ -54,6 +54,11 @@ check_static_baseline() {
       --include='*.cc' --include='*.cpp' | grep -v 'depthPoseCallback' >/dev/null; then
     fail "direct ROS callbacks use ConstSharedPtr by reference, which is incompatible with Foxy rclcpp"
   fi
+  if grep -R -nE 'tf2_geometry_msgs/tf2_geometry_msgs\.hpp|tf2/utils\.hpp' \
+      "$PROJECT_ROOT/src" --include='*.h' --include='*.hpp' \
+      --include='*.cc' --include='*.cpp' >/dev/null; then
+    fail "active sources use tf2 .hpp headers that are unavailable in ROS 2 Foxy"
+  fi
   if grep -R -nE --exclude=verify_m20pro_baseline.sh \
       '/opt/ros/humble|ros-humble-' "$PROJECT_ROOT/scripts" >/dev/null; then
     fail "runtime scripts contain a ROS 2 Humble path or package"

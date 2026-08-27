@@ -4,6 +4,18 @@
 #include <nav_msgs/msg/odometry.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <tf2/LinearMath/Quaternion.h>
+#include <tf2/utils.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
+
+namespace {
+double foxyTf2ApiSmoke() {
+  tf2::Quaternion quaternion;
+  quaternion.setRPY(0.0, 0.0, 0.25);
+  const auto orientation = tf2::toMsg(quaternion);
+  return tf2::getYaw(orientation);
+}
+}  // namespace
 
 class FoxySubscriptionSmoke : public rclcpp::Node {
  public:
@@ -30,5 +42,5 @@ int main(int argc, char **argv) {
   rclcpp::init(argc, argv);
   auto node = std::make_shared<FoxySubscriptionSmoke>();
   rclcpp::shutdown();
-  return node ? 0 : 1;
+  return node && foxyTf2ApiSmoke() > 0.0 ? 0 : 1;
 }
