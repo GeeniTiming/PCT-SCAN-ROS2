@@ -250,6 +250,31 @@ PCT-SCAN-ROS2/
 简化和分段线性参考参数化，再发布 `planning/bspline`。分段线性参考用于守住楼梯和
 窄通道的全局走廊，平滑只由局部 B-spline 完成。
 
+真机定位导航时，bridge 可以在每次规划请求到来时从最新里程计自动更新 PCT 起点：
+
+```bash
+ros2 launch pct_scan_bridge pct_bridge.launch.py \
+  tomogram_path:=/absolute/path/to/scene.pickle \
+  rsg_root:=/absolute/path/to/scene_assets \
+  scene_name:=custom \
+  frame_id:=map \
+  coord_mode:=identity \
+  auto_start_from_odom:=true \
+  odom_topic:=/lightning/odom \
+  odom_timeout_sec:=0.5 \
+  goal_topic:=/goal_pose
+```
+
+bridge 只缓存 odometry，不会在每一帧定位更新时反复规划。收到 `/goal_pose` 或从
+交互 marker 选择 `Plan route` 时，它才截取当前位姿、吸附到 tomogram 可通行层并
+生成 `/pct_path`。缺少新鲜 odometry、frame 不是 `map`、坐标非有限值或当前位置
+无法吸附时会拒绝规划。手动调试可设置 `auto_start_from_odom:=false`，并通过独立的
+`/pct_start` 输入起点；不再占用常见的定位初始化话题 `/initialpose`。
+
+Lightning 的 odometry 表示 `lidar_link` 时，可用 `odom_start_z_offset` 补偿传感器
+到规划地面点的高度；默认 `0.0` 依靠 tomogram 就近吸附，真机楼梯测试前仍需实测
+外参。
+
 更完整的原理和调试过程见：
 
 - `docs/tutorial_phase4_pct_scan_bridge.md`

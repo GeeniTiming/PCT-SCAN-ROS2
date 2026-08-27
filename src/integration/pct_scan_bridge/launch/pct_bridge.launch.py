@@ -14,6 +14,13 @@ def generate_launch_description():
         DeclareLaunchArgument("frame_id", default_value="world"),
         DeclareLaunchArgument("coord_mode", default_value="identity"),
         DeclareLaunchArgument("path_topic", default_value="/pct_path"),
+        DeclareLaunchArgument("start_topic", default_value="/pct_start"),
+        DeclareLaunchArgument("goal_topic", default_value="/goal_pose"),
+        DeclareLaunchArgument("clicked_point_topic", default_value="/clicked_point"),
+        DeclareLaunchArgument("auto_start_from_odom", default_value="false"),
+        DeclareLaunchArgument("odom_topic", default_value="/lightning/odom"),
+        DeclareLaunchArgument("odom_timeout_sec", default_value="0.5"),
+        DeclareLaunchArgument("odom_start_z_offset", default_value="0.0"),
         DeclareLaunchArgument("publish_tomogram", default_value="true"),
         DeclareLaunchArgument("tomogram_topic", default_value="/pct_tomogram"),
         DeclareLaunchArgument("plan_on_startup", default_value="false"),
@@ -57,6 +64,17 @@ def generate_launch_description():
                 "coord_mode": LaunchConfiguration("coord_mode"),
                 "optimize_path": False,
                 "path_topic": LaunchConfiguration("path_topic"),
+                "start_topic": LaunchConfiguration("start_topic"),
+                "goal_topic": LaunchConfiguration("goal_topic"),
+                "clicked_point_topic": LaunchConfiguration("clicked_point_topic"),
+                "auto_start_from_odom": LaunchConfiguration(
+                    "auto_start_from_odom"
+                ),
+                "odom_topic": LaunchConfiguration("odom_topic"),
+                "odom_timeout_sec": LaunchConfiguration("odom_timeout_sec"),
+                "odom_start_z_offset": LaunchConfiguration(
+                    "odom_start_z_offset"
+                ),
                 "publish_tomogram": LaunchConfiguration("publish_tomogram"),
                 "tomogram_topic": LaunchConfiguration("tomogram_topic"),
                 "plan_on_startup": LaunchConfiguration("plan_on_startup"),
