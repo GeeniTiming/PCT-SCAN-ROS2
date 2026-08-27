@@ -977,7 +977,7 @@ void GridMap::publishMap()
   map_pub_->publish(cloud_msg);
 }
 
-void GridMap::publishMapInflate(bool all_info)
+void GridMap::publishMapInflate(bool)
 {
 
   if (map_inf_pub_->get_subscription_count() == 0)

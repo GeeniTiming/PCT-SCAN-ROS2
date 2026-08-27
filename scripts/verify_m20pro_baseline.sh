@@ -45,6 +45,10 @@ check_static_baseline() {
       --include=CMakeLists.txt --include=package.xml >/dev/null; then
     fail "active PCT packages still depend on ROS pybind11_vendor"
   fi
+  if ! grep -A3 'ament_export_dependencies' \
+      "$PROJECT_ROOT/src/planner/plan_env/CMakeLists.txt" | grep -q 'OpenCV PCL'; then
+    fail "plan_env does not export its OpenCV/PCL CMake dependencies"
+  fi
   if grep -R -nE 'void[[:space:]]+[[:alnum:]_:]+Callback\(const[[:space:]]+[^)]*::ConstSharedPtr[[:space:]]*&' \
       "$PROJECT_ROOT/src/planner" --include='*.h' --include='*.hpp' \
       --include='*.cc' --include='*.cpp' | grep -v 'depthPoseCallback' >/dev/null; then
