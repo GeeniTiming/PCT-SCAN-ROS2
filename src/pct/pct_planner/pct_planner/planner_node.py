@@ -6,8 +6,8 @@ Modified for ROS 2 Foxy and PCT-SCAN-ROS2 in 2026; see ``src/pct/NOTICE``.
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
-from nav_msgs.msg import Path
+from rclpy.qos import qos_profile_sensor_data, QoSProfile, QoSDurabilityPolicy, QoSReliabilityPolicy
+from nav_msgs.msg import Odometry, Path
 from geometry_msgs.msg import PointStamped, Pose, PoseStamped, PoseWithCovarianceStamped
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
@@ -64,6 +64,10 @@ class PCTPlanner(Node):
         self.declare_parameter("snap_search_radius_cells", 10)
         self.declare_parameter("snap_to_traversable_layer", True)
         self.declare_parameter("plan_on_marker_release", False)
+        self.declare_parameter("odom_auto_start", False)
+        self.declare_parameter("odom_topic", "/lightning/odom")
+        self.declare_parameter("odom_start_z_offset", 0.0)
+        self.declare_parameter("odom_start_min_delta", 0.05)
         
         # Get parameters
         rsg_root_param = self.get_parameter("rsg_root")
@@ -134,6 +138,18 @@ class PCTPlanner(Node):
         self.plan_on_marker_release = (
             self.get_parameter("plan_on_marker_release").get_parameter_value().bool_value
         )
+        self.odom_auto_start = (
+            self.get_parameter("odom_auto_start").get_parameter_value().bool_value
+        )
+        self.odom_topic = self.get_parameter("odom_topic").get_parameter_value().string_value
+        self.odom_start_z_offset = (
+            self.get_parameter("odom_start_z_offset").get_parameter_value().double_value
+        )
+        self.odom_start_min_delta = (
+            self.get_parameter("odom_start_min_delta").get_parameter_value().double_value
+        )
+        self._last_odom_start_world = None
+        self._odom_snap_fail_log = 0.0
 
         if self.clicked_point_mode not in ("alternate", "start", "goal"):
             raise ValueError("clicked_point_mode must be one of: alternate, start, goal")
@@ -169,6 +185,15 @@ class PCTPlanner(Node):
 
         if self.enable_interactive_markers:
             self.init_interactive_markers()
+
+        if self.odom_auto_start:
+            if not self.odom_topic:
+                raise ValueError("odom_topic must not be empty when odom_auto_start is enabled")
+            self.create_subscription(Odometry, self.odom_topic, self.odom_start_cb, qos_profile_sensor_data)
+            self.get_logger().info(
+                f"Odom auto-start enabled: start marker follows {self.odom_topic}; "
+                "goal is left unchanged and A* only runs on explicit Plan requests."
+            )
 
         self.get_logger().info(
             "Interactive marker planning ready. Drag Start and Goal in RViz, "
@@ -231,6 +256,28 @@ class PCTPlanner(Node):
         pose = msg.pose
         self.set_goal(pose.position.x, pose.position.y, pose.position.z)
 
+    def odom_start_cb(self, msg):
+        position = msg.pose.pose.position
+        world = (position.x, position.y, position.z + self.odom_start_z_offset)
+        if self._last_odom_start_world is not None:
+            delta_sq = (
+                (world[0] - self._last_odom_start_world[0]) ** 2
+                + (world[1] - self._last_odom_start_world[1]) ** 2
+                + (world[2] - self._last_odom_start_world[2]) ** 2
+            )
+            if delta_sq < self.odom_start_min_delta ** 2:
+                return
+        if self.set_start(world[0], world[1], world[2], plan=False, update_marker=True, quiet=True):
+            self._last_odom_start_world = world
+        else:
+            now = self.get_clock().now().nanoseconds / 1e9
+            if now - self._odom_snap_fail_log > 5.0:
+                self.get_logger().warn(
+                    f"Cannot snap odom start {world[0]:.2f},{world[1]:.2f},{world[2]:.2f} "
+                    "to a traversable tomogram cell; keeping the previous start marker."
+                )
+                self._odom_snap_fail_log = now
+
     def clicked_point_cb(self, msg):
         point = msg.point
         if self.clicked_point_mode == "start":
@@ -244,8 +291,8 @@ class PCTPlanner(Node):
             self.set_goal(point.x, point.y, point.z)
             self.clicked_next_is_start = True
 
-    def set_start(self, x, y, z, plan=True, update_marker=True):
-        waypoint_data = self.prepare_waypoint("start", x, y, z)
+    def set_start(self, x, y, z, plan=True, update_marker=True, quiet=False):
+        waypoint_data = self.prepare_waypoint("start", x, y, z, quiet=quiet)
         if waypoint_data is None:
             if update_marker and self.start_pose is not None:
                 self.update_interactive_marker_pose("start", self.start_pose)
@@ -257,7 +304,8 @@ class PCTPlanner(Node):
         self.publish_waypoint_markers()
         if update_marker:
             self.update_interactive_marker_pose("start", self.start_pose)
-        self.get_logger().info(f"Start set: {self.describe_pose(self.start_pose, self.start_layer)}")
+        if not quiet:
+            self.get_logger().info(f"Start set: {self.describe_pose(self.start_pose, self.start_layer)}")
         if plan:
             self.plan_current_waypoints()
         return True
@@ -280,7 +328,7 @@ class PCTPlanner(Node):
             self.plan_current_waypoints()
         return True
 
-    def prepare_waypoint(self, name, x, y, z):
+    def prepare_waypoint(self, name, x, y, z, quiet=False):
         waypoint = self.world_to_planner(np.array([x, y, z], dtype=np.float32))
         if not self.snap_to_traversable_layer:
             layer = self.planner.z2layer(waypoint[2], self.planner.pos2idx(waypoint[:2]))
@@ -292,20 +340,22 @@ class PCTPlanner(Node):
             allowed_mask=self.endpoint_mask,
         )
         if snapped is None:
-            self.get_logger().warn(
-                f"No traversable tomogram cell found near {name} "
-                f"xyz=({waypoint[0]:.2f}, {waypoint[1]:.2f}, {waypoint[2]:.2f}); "
-                "keeping the previous waypoint and skipping planning."
-            )
+            if not quiet:
+                self.get_logger().warn(
+                    f"No traversable tomogram cell found near {name} "
+                    f"xyz=({waypoint[0]:.2f}, {waypoint[1]:.2f}, {waypoint[2]:.2f}); "
+                    "keeping the previous waypoint and skipping planning."
+                )
             return None
 
         snapped_pose, snapped_idx, distance = snapped
         layer = int(snapped_idx[0])
-        self.get_logger().info(
-            f"{name.capitalize()} snapped to layer={layer}, "
-            f"planner_y={snapped_idx[1]}, planner_x={snapped_idx[2]}, "
-            f"distance={distance:.2f} m"
-        )
+        if not quiet:
+            self.get_logger().info(
+                f"{name.capitalize()} snapped to layer={layer}, "
+                f"planner_y={snapped_idx[1]}, planner_x={snapped_idx[2]}, "
+                f"distance={distance:.2f} m"
+            )
         return snapped_pose, layer
 
     def plan_current_waypoints(self):

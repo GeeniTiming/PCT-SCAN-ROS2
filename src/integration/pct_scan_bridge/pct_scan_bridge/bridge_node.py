@@ -29,14 +29,13 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
         super().__init__()
 
         self.declare_parameter("auto_start_from_odom", False)
-        self.declare_parameter("odom_topic", "/lightning/odom")
         self.declare_parameter("odom_timeout_sec", 0.5)
-        self.declare_parameter("odom_start_z_offset", 0.0)
         self.auto_start_from_odom = (
             self.get_parameter("auto_start_from_odom")
             .get_parameter_value()
             .bool_value
         )
+        self.auto_start_from_odom = self.auto_start_from_odom or self.odom_auto_start
         self.odom_topic = (
             self.get_parameter("odom_topic").get_parameter_value().string_value
         )
@@ -54,7 +53,7 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
             ),
         )
         self.odom_sub = None
-        if self.auto_start_from_odom:
+        if self.auto_start_from_odom and not self.odom_auto_start:
             self.odom_sub = self.create_subscription(
                 Odometry,
                 self.odom_topic,
@@ -65,10 +64,17 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
                 "Automatic PCT start enabled: each planning request snapshots "
                 f"fresh odometry from {self.odom_topic} in frame {self.frame_id}"
             )
-        else:
+        elif not self.auto_start_from_odom:
             self.get_logger().info(
                 "Automatic PCT start disabled; interactive/manual Start remains active"
             )
+
+    def odom_start_cb(self, message):
+        """Field-compatible marker following with frame/finite checks."""
+        self.odom_callback(message)
+        xyz, _ = self.odom_start_policy.resolve(self.get_clock().now().nanoseconds)
+        if xyz is not None:
+            super().odom_start_cb(message)
 
     def odom_callback(self, message):
         self.odom_start_policy.update(

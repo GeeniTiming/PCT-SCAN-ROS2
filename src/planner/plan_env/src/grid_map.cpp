@@ -28,7 +28,7 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.local_update_range_x", mp_.local_update_range_(0), x_size / 2.0);
   load_parameter(node_, "grid_map.local_update_range_y", mp_.local_update_range_(1), y_size / 2.0);
   load_parameter(node_, "grid_map.local_update_range_z", mp_.local_update_range_(2), z_size / 2.0);
-  
+
   load_parameter(node_, "grid_map.obstacles_inflation_z_up", mp_.obstacles_inflation_z_up, -1.0);
   load_parameter(node_, "grid_map.obstacles_inflation_z_down", mp_.obstacles_inflation_z_down, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_radius", mp_.double_cylinder_radius_, -1.0);
@@ -65,6 +65,12 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.cloud_is_world", mp_.cloud_is_world_, true);
   load_parameter(node_, "grid_map.need_extrinsic", mp_.need_extrinsic_, true);
 
+  string cloud_topic, sensor_pose_topic, depth_topic, sliding_map_frame_topic;
+  load_parameter(node_, "grid_map.cloud_topic", cloud_topic, string("cloud"));
+  load_parameter(node_, "grid_map.sensor_pose_topic", sensor_pose_topic, string("sensor_pose"));
+  load_parameter(node_, "grid_map.depth_topic", depth_topic, string("depth"));
+  load_parameter(node_, "grid_map.sliding_map_frame_topic", sliding_map_frame_topic, string("body_pose"));
+
   mp_.lidar_extrinsic_ <<
       1.0, 0.0, 0.0, -0.01100,
       0.0, 1.0, 0.0, -0.02329,
@@ -76,7 +82,7 @@ void GridMap::initMap(rclcpp::Node *node)
      -1.0,  0.000000, 0.000000,  0.00000,
       0.0, -0.707107, 0.707107,  0.07510,
       0.0,  0.000000, 0.000000,  1.00000;
-      
+
   if (mp_.sensor_type_ != "lidar" && mp_.sensor_type_ != "depth")
   {
     RCLCPP_ERROR(node_->get_logger(), "[GridMap] invalid grid_map.sensor_type: %s; falling back to lidar",
@@ -138,8 +144,8 @@ void GridMap::initMap(rclcpp::Node *node)
   {
     depth_sub_ = std::make_shared<message_filters::Subscriber<sensor_msgs::msg::Image>>();
     depth_pose_sub_ = std::make_shared<message_filters::Subscriber<nav_msgs::msg::Odometry>>();
-    depth_sub_->subscribe(node_, "depth", rmw_qos_profile_sensor_data);
-    depth_pose_sub_->subscribe(node_, "sensor_pose", rmw_qos_profile_sensor_data);
+    depth_sub_->subscribe(node_, depth_topic, rmw_qos_profile_sensor_data);
+    depth_pose_sub_->subscribe(node_, sensor_pose_topic, rmw_qos_profile_sensor_data);
 
     sync_image_pose_.reset(new message_filters::Synchronizer<SyncPolicyImagePose>(
         SyncPolicyImagePose(100), *depth_sub_, *depth_pose_sub_));
@@ -149,15 +155,15 @@ void GridMap::initMap(rclcpp::Node *node)
   else if (mp_.sensor_type_ == "lidar")
   {
     lidar_pose_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
-        "sensor_pose", rclcpp::SensorDataQoS(),
+        sensor_pose_topic, rclcpp::SensorDataQoS(),
         std::bind(&GridMap::sensorPoseCallback, this, std::placeholders::_1));
     cloud_sub_ = node_->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "cloud", rclcpp::SensorDataQoS(),
+        cloud_topic, rclcpp::SensorDataQoS(),
         std::bind(&GridMap::cloudCallback, this, std::placeholders::_1));
   }
 
   sliding_map_frame_sub_ = node_->create_subscription<nav_msgs::msg::Odometry>(
-      "body_pose", rclcpp::SensorDataQoS(),
+      sliding_map_frame_topic, rclcpp::SensorDataQoS(),
       std::bind(&GridMap::slidingMapFrameCallback, this, std::placeholders::_1));
 
   occ_timer_ = node_->create_wall_timer(std::chrono::milliseconds(50),
@@ -834,7 +840,7 @@ void GridMap::depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr &i
   }
 }
 
-void GridMap::sensorPoseCallback(nav_msgs::msg::Odometry::ConstSharedPtr pose_msg)
+void GridMap::sensorPoseCallback(const nav_msgs::msg::Odometry::ConstSharedPtr pose_msg)
 {
   if (mp_.sensor_type_ != "lidar")
     return;
@@ -863,13 +869,13 @@ void GridMap::sensorPoseCallback(nav_msgs::msg::Odometry::ConstSharedPtr pose_ms
   updateSlidingMap(md_.ray_pos_);
 }
 
-void GridMap::slidingMapFrameCallback(nav_msgs::msg::Odometry::ConstSharedPtr pose)
+void GridMap::slidingMapFrameCallback(const nav_msgs::msg::Odometry::ConstSharedPtr pose)
 {
   const geometry_msgs::msg::Point &pos = pose->pose.pose.position;
   md_.sliding_map_frame_pos_ = Eigen::Vector3d(pos.x, pos.y, pos.z);
 }
 
-void GridMap::cloudCallback(sensor_msgs::msg::PointCloud2::ConstSharedPtr img)
+void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr img)
 {
   if (mp_.sensor_type_ != "lidar")
     return;
@@ -977,7 +983,7 @@ void GridMap::publishMap()
   map_pub_->publish(cloud_msg);
 }
 
-void GridMap::publishMapInflate(bool)
+void GridMap::publishMapInflate(bool all_info)
 {
 
   if (map_inf_pub_->get_subscription_count() == 0)

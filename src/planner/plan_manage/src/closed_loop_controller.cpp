@@ -30,15 +30,19 @@ public:
     max_vy_ = declare_parameter<double>("max_vy", 0.35);
     max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
     finish_dist_ = declare_parameter<double>("finish_dist", 0.15);
+    const std::string bspline_topic = declare_parameter<std::string>("bspline_topic", "planning/bspline");
+    const std::string odom_topic = declare_parameter<std::string>("odom_topic", "body_pose");
+    const std::string cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
+    const std::string frozen_topic = declare_parameter<std::string>("frozen_topic", "planning/go2_execution_frozen");
 
     bspline_sub_ = create_subscription<scan_planner_msgs::msg::Bspline>(
-        "planning/bspline", 10,
+        bspline_topic, 10,
         std::bind(&ClosedLoopController::bsplineCallback, this, std::placeholders::_1));
     odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-        "body_pose", rclcpp::SensorDataQoS(),
+        odom_topic, rclcpp::SensorDataQoS(),
         std::bind(&ClosedLoopController::odomCallback, this, std::placeholders::_1));
-    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>("cmd_vel", 20);
-    execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>("planning/go2_execution_frozen", 10);
+    cmd_vel_pub_ = create_publisher<geometry_msgs::msg::Twist>(cmd_vel_topic, 20);
+    execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>(frozen_topic, 10);
     cmd_timer_ = create_wall_timer(std::chrono::milliseconds(10),
                                    std::bind(&ClosedLoopController::cmdCallback, this));
     last_update_time_ = now();

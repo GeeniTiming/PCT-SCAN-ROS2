@@ -17,6 +17,8 @@ def generate_launch_description():
         DeclareLaunchArgument("start_topic", default_value="/pct_start"),
         DeclareLaunchArgument("goal_topic", default_value="/goal_pose"),
         DeclareLaunchArgument("clicked_point_topic", default_value="/clicked_point"),
+        DeclareLaunchArgument("odom_auto_start", default_value="false"),
+        DeclareLaunchArgument("odom_start_min_delta", default_value="0.05"),
         DeclareLaunchArgument("auto_start_from_odom", default_value="false"),
         DeclareLaunchArgument("odom_topic", default_value="/lightning/odom"),
         DeclareLaunchArgument("odom_timeout_sec", default_value="0.5"),
@@ -67,6 +69,8 @@ def generate_launch_description():
                 "start_topic": LaunchConfiguration("start_topic"),
                 "goal_topic": LaunchConfiguration("goal_topic"),
                 "clicked_point_topic": LaunchConfiguration("clicked_point_topic"),
+                "odom_auto_start": LaunchConfiguration("odom_auto_start"),
+                "odom_start_min_delta": LaunchConfiguration("odom_start_min_delta"),
                 "auto_start_from_odom": LaunchConfiguration(
                     "auto_start_from_odom"
                 ),
