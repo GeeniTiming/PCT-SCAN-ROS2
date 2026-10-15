@@ -2,6 +2,9 @@
 #define _SCAN_REPLAN_FSM_H_
 
 #include <Eigen/Eigen>
+#include <chrono>
+#include <plan_manage/arrival_policy.h>
+#include <plan_manage/goal_heading_utils.h>
 #include <algorithm>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
@@ -45,6 +48,10 @@ namespace scan_planner
       REFERENCE_PATH = 3,
     };
 
+    bool arrival_hold_{false}, local_target_blocked_{false};
+    ArrivalPolicy arrival_policy_;
+    std::chrono::steady_clock::time_point last_odom_received_{};
+    std::chrono::steady_clock::time_point next_retry_{};
     /* planning utils */
     SCANPlannerManager::Ptr planner_manager_;
     PlanningVisualization::Ptr visualization_;
@@ -57,12 +64,17 @@ namespace scan_planner
     int waypoint_num_;
     double planning_horizon_;
     double emergency_time_;
+    double odom_timeout_;
     double rviz_goal_height_;
     double self_inflation_z_up_, self_inflation_z_down_;
     double self_double_cylinder_radius_, self_double_cylinder_offset_;
     double body_height_;
     double reference_path_min_distance_, reference_path_simplify_tolerance_;
     std::string self_inflation_frame_id_;
+    // Final heading is checked only after entering the physical position arrival zone.
+    std::optional<double> terminal_goal_yaw_;
+    double goal_yaw_tolerance_{0.1};
+    bool terminal_alignment_active_{false};
 
     /* planning data */
     bool trigger_, have_target_, have_odom_, have_new_target_;
@@ -100,7 +112,7 @@ namespace scan_planner
 
     /* helper functions */
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
-    bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
+    bool callEmergencyStop(Eigen::Vector3d stop_pos, bool terminal_align = false);                          // front-end and back-end method
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
 

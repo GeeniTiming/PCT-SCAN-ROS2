@@ -2,6 +2,7 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <vector>
 
 #include <Eigen/Eigen>
@@ -14,6 +15,7 @@
 #include <tf2/utils.h>
 
 #include "bspline_opt/uniform_bspline.h"
+#include "plan_manage/goal_heading_utils.h"
 
 namespace scan_planner
 {
@@ -30,6 +32,12 @@ public:
     max_vy_ = declare_parameter<double>("max_vy", 0.35);
     max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
     finish_dist_ = declare_parameter<double>("finish_dist", 0.15);
+    finish_yaw_tolerance_ = declare_parameter<double>("finish_yaw_tolerance", 0.1);
+    terminal_min_yaw_rate_ = declare_parameter<double>("terminal_min_yaw_rate", 0.0);
+    if (!std::isfinite(finish_yaw_tolerance_) || finish_yaw_tolerance_ <= 0.0 ||
+        finish_yaw_tolerance_ >= M_PI || !std::isfinite(terminal_min_yaw_rate_) ||
+        terminal_min_yaw_rate_ < 0.0 || terminal_min_yaw_rate_ > max_vyaw_)
+      throw std::runtime_error("Invalid terminal yaw tolerance or minimum rate");
     const std::string bspline_topic = declare_parameter<std::string>("bspline_topic", "planning/bspline");
     const std::string odom_topic = declare_parameter<std::string>("odom_topic", "body_pose");
     const std::string cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
@@ -106,12 +114,28 @@ private:
     traj_ = {position, position.getDerivative()};
     traj_.push_back(traj_[1].getDerivative());
     traj_duration_ = traj_[0].getTimeSum();
+    // Read metadata from this exact trajectory; never retain a previous goal's yaw.
+    // Moving trajectories retain path-following yaw; only an explicit
+    // stationary arrival hold activates terminal alignment.
+    terminal_goal_yaw_ = decodeTerminalGoalYaw(*msg);
+    const bool previous_terminal_alignment = terminal_alignment_;
+    terminal_alignment_ = isTerminalAlignmentTrajectory(*msg);
+    if (terminal_alignment_)
+      RCLCPP_INFO(get_logger(), "TERMINAL_ROTATION_REQUEST: trajectory=%lld target_yaw=%.2fdeg",
+                  static_cast<long long>(msg->traj_id), *terminal_goal_yaw_ * 180.0 / M_PI);
+    else if (previous_terminal_alignment)
+      RCLCPP_INFO(get_logger(), "TERMINAL_ROTATION_EXIT: trajectory=%lld heading_present=%d",
+                  static_cast<long long>(msg->traj_id), int(terminal_goal_yaw_.has_value()));
     traj_id_ = msg->traj_id;
     exec_time_ = 0.0;
     last_update_time_ = now();
     receive_traj_ = true;
     RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
                 static_cast<long long>(traj_id_), traj_duration_);
+    if (terminal_goal_yaw_)
+      RCLCPP_INFO(get_logger(),
+                  "Received terminal heading: map yaw=%.1f deg, trajectory %lld",
+                  *terminal_goal_yaw_ * 180.0 / M_PI, static_cast<long long>(traj_id_));
   }
 
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
@@ -130,6 +154,23 @@ private:
       return;
     }
     const auto current_time = now();
+    if (terminal_alignment_ && terminal_goal_yaw_)
+    {
+      // This trajectory is a stationary arrival hold. Do not translate or
+      // advance its clock while turning; SCAN monitors the real global pose.
+      const double error = *terminal_goal_yaw_ - odom_yaw_;
+      const double rate = terminalAlignmentYawRate(error, finish_yaw_tolerance_,
+                                                   kp_yaw_, terminal_min_yaw_rate_, max_vyaw_);
+      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
+          "TERMINAL_ROTATION_STATUS: trajectory=%lld target_yaw=%.2fdeg actual_yaw=%.2fdeg "
+          "yaw_error=%.2fdeg yaw_command=%.3frad/s",
+          static_cast<long long>(traj_id_), *terminal_goal_yaw_ * 180.0 / M_PI,
+          odom_yaw_ * 180.0 / M_PI, std::remainder(error, 2.0 * M_PI) * 180.0 / M_PI, rate);
+      publishExecutionFrozen(rate != 0.0);
+      publishStop(rate);
+      last_update_time_ = current_time;
+      return;
+    }
     double dt = (current_time - last_update_time_).seconds();
     if (dt < 0.0 || dt > 0.2) dt = 0.0;
     const double t_eval = std::min(exec_time_, traj_duration_);
@@ -176,6 +217,9 @@ private:
   std::int64_t traj_id_{0};
   Eigen::Vector3d odom_pos_{Eigen::Vector3d::Zero()};
   double odom_yaw_{0.0};
+  std::optional<double> terminal_goal_yaw_;
+  bool terminal_alignment_{false};
+  double finish_yaw_tolerance_, terminal_min_yaw_rate_;
   double exec_time_{0.0};
   rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
   double time_forward_, heading_error_threshold_, kp_pos_, kp_yaw_;

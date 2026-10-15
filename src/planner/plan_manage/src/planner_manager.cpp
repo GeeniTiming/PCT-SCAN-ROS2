@@ -113,8 +113,25 @@ namespace scan_planner
       start_end_derivatives.clear();
       flag_regenerate = false;
 
-      if (flag_first_call || flag_polyInit || flag_force_polynomial /*|| ( start_pt - local_target_pt ).norm() < 1.0*/) // Initial path generated from a min-snap traj by order.
+      bool previous_trajectory_exhausted = false;
+      if (!flag_first_call && !flag_polyInit && !flag_force_polynomial)
       {
+        const double previous_traj_elapsed =
+            (node_->now() - local_data_.start_time_).seconds();
+        previous_trajectory_exhausted =
+            local_data_.duration_ <= 0.0 ||
+            previous_traj_elapsed >= local_data_.duration_ - 1e-3;
+      }
+
+      if (flag_first_call || flag_polyInit || flag_force_polynomial ||
+          previous_trajectory_exhausted /*|| ( start_pt - local_target_pt ).norm() < 1.0*/) // Initial path generated from a min-snap traj by order.
+      {
+        if (previous_trajectory_exhausted && !flag_first_call &&
+            !flag_polyInit && !flag_force_polynomial)
+        {
+          RCLCPP_INFO(node_->get_logger(),
+                      "Previous local trajectory expired; rebuilding from the current state");
+        }
         flag_first_call = false;
         flag_force_polynomial = false;
 
@@ -174,20 +191,37 @@ namespace scan_planner
       {
 
         double t;
-        double t_cur = (node_->now() - local_data_.start_time_).seconds();
+        double t_cur = std::max(
+            0.0, std::min(local_data_.duration_,
+                          (node_->now() - local_data_.start_time_).seconds()));
 
         vector<double> pseudo_arc_length;
         vector<Eigen::Vector3d> segment_point;
-        pseudo_arc_length.push_back(0.0);
         for (t = t_cur; t < local_data_.duration_ + 1e-3; t += ts)
         {
-          segment_point.push_back(local_data_.position_traj_.evaluateDeBoorT(t));
-          if (t > t_cur)
+          const Eigen::Vector3d point = local_data_.position_traj_.evaluateDeBoorT(t);
+          if (segment_point.empty())
           {
-            pseudo_arc_length.push_back((segment_point.back() - segment_point[segment_point.size() - 2]).norm() + pseudo_arc_length.back());
+            segment_point.push_back(point);
+            pseudo_arc_length.push_back(0.0);
+          }
+          else
+          {
+            pseudo_arc_length.push_back(
+                (point - segment_point.back()).norm() + pseudo_arc_length.back());
+            segment_point.push_back(point);
           }
         }
         t -= ts;
+
+        if (segment_point.empty())
+        {
+          RCLCPP_WARN(node_->get_logger(),
+                      "Previous trajectory has no remaining samples; rebuilding from the current state");
+          flag_force_polynomial = true;
+          flag_regenerate = true;
+          continue;
+        }
 
         double poly_time = (local_data_.position_traj_.evaluateDeBoorT(t) - local_target_pt).norm() / pp_.max_vel_ * 2;
         if (poly_time > ts)
@@ -199,18 +233,35 @@ namespace scan_planner
 
           for (t = ts; t < poly_time; t += ts)
           {
-            if (!pseudo_arc_length.empty())
+            if (!segment_point.empty())
             {
-              segment_point.push_back(gl_traj.evaluate(t));
-              pseudo_arc_length.push_back((segment_point.back() - segment_point[segment_point.size() - 2]).norm() + pseudo_arc_length.back());
+              const Eigen::Vector3d point = gl_traj.evaluate(t);
+              pseudo_arc_length.push_back(
+                  (point - segment_point.back()).norm() + pseudo_arc_length.back());
+              segment_point.push_back(point);
             }
             else
             {
-              RCLCPP_ERROR(node_->get_logger(), "pseudo_arc_length is empty; aborting replan");
-              continuous_failures_count_++;
-              return false;
+              RCLCPP_WARN(node_->get_logger(),
+                          "Previous trajectory samples disappeared; rebuilding from the current state");
+              flag_force_polynomial = true;
+              flag_regenerate = true;
+              break;
             }
           }
+        }
+
+        if (flag_regenerate)
+          continue;
+
+        if (pseudo_arc_length.size() < 2 || segment_point.size() < 2 ||
+            pseudo_arc_length.back() <= 1e-9)
+        {
+          RCLCPP_WARN(node_->get_logger(),
+                      "Previous trajectory is too short to resample; rebuilding from the current state");
+          flag_force_polynomial = true;
+          flag_regenerate = true;
+          continue;
         }
 
         double sample_length = 0;
@@ -222,12 +273,19 @@ namespace scan_planner
           point_set.clear();
           sample_length = 0;
           id = 0;
-          while ((id <= pseudo_arc_length.size() - 2) && sample_length <= pseudo_arc_length.back())
+          while ((id + 1 < pseudo_arc_length.size()) &&
+                 sample_length <= pseudo_arc_length.back())
           {
             if (sample_length >= pseudo_arc_length[id] && sample_length < pseudo_arc_length[id + 1])
             {
-              point_set.push_back((sample_length - pseudo_arc_length[id]) / (pseudo_arc_length[id + 1] - pseudo_arc_length[id]) * segment_point[id + 1] +
-                                  (pseudo_arc_length[id + 1] - sample_length) / (pseudo_arc_length[id + 1] - pseudo_arc_length[id]) * segment_point[id]);
+              const double arc_span = pseudo_arc_length[id + 1] - pseudo_arc_length[id];
+              if (arc_span <= 1e-9)
+              {
+                id++;
+                continue;
+              }
+              point_set.push_back((sample_length - pseudo_arc_length[id]) / arc_span * segment_point[id + 1] +
+                                  (pseudo_arc_length[id + 1] - sample_length) / arc_span * segment_point[id]);
               sample_length += cps_dist;
             }
             else

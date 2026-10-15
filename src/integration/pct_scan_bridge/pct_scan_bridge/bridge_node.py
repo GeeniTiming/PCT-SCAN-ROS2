@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
+from geometry_msgs.msg import Pose, PoseStamped, Quaternion
 from nav_msgs.msg import Odometry
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data,
+)
+from visualization_msgs.msg import (
+    InteractiveMarkerControl, InteractiveMarkerFeedback, Marker,
+)
 
 from pct_planner import planner_node as upstream_planner_node
 
@@ -22,11 +30,29 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
     """Reuse PCT's ROS interaction layer while owning integration fixes here."""
 
     def __init__(self):
+        # The parent builds the interactive markers during construction.
+        self.goal_yaw = 0.0
+        self.goal_heading_pub = None
         # PCTPlanner constructs the class through this module-level symbol.
         # Override it only inside this bridge process; the dependency checkout
         # and its installed files stay untouched.
         upstream_planner_node.TomogramPlanner = DynamicLayerTomogramPlanner
         super().__init__()
+
+        self.goal_heading_pub = self.create_publisher(
+            PoseStamped,
+            "/pct_planner/goal_pose_preview",
+            QoSProfile(
+                depth=1,
+                reliability=ReliabilityPolicy.RELIABLE,
+                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
+        self.publish_goal_heading_preview()
+        self.get_logger().info(
+            "Goal heading editor ready: rotate the Goal ring to save map yaw. "
+            "Heading is carried by /pct_path; SCAN/controller handle terminal alignment."
+        )
 
         self.declare_parameter("auto_start_from_odom", False)
         self.declare_parameter("odom_timeout_sec", 0.5)
@@ -68,6 +94,134 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
             self.get_logger().info(
                 "Automatic PCT start disabled; interactive/manual Start remains active"
             )
+
+    def make_interactive_marker(self, name, description, waypoint, color):
+        """Keep position handles separate from the Goal's saved heading."""
+        marker = super().make_interactive_marker(name, description, waypoint, color)
+        marker.description = f"{description} (position)"
+        marker.controls = [
+            control for control in marker.controls
+            if control.name not in ("move_x", "move_y")
+        ]
+        for control in marker.controls:
+            if control.name == f"{name}_drag":
+                # Drag on the map XY plane, independent of the viewing angle.
+                plane = self.make_xy_plane_control()
+                control.orientation = plane.orientation
+                control.orientation_mode = plane.orientation_mode
+                control.description = f"Drag {description} position on map XY"
+            elif control.name == "move_z":
+                control.description = "Adjust height only (map Z)"
+        if name == "goal":
+            marker.description = "Goal (heading preview)"
+            marker.pose.orientation = self.goal_orientation()
+            # The sphere already moves in XY. Replace the redundant XY disc
+            # so that the new ring has one unambiguous purpose: editing yaw.
+            marker.controls = [
+                control for control in marker.controls if control.name != "move_xy"
+            ]
+
+            visual = InteractiveMarkerControl()
+            visual.name = "goal_heading_arrow"
+            visual.orientation.w = 1.0
+            visual.interaction_mode = InteractiveMarkerControl.NONE
+            visual.orientation_mode = InteractiveMarkerControl.INHERIT
+            visual.always_visible = True
+            arrow = Marker()
+            arrow.type = Marker.ARROW
+            arrow.pose.orientation.w = 1.0
+            arrow.pose.position.z = 0.5
+            arrow.scale.x = 1.0
+            arrow.scale.y = 0.08
+            arrow.scale.z = 0.16
+            arrow.color.r = 1.0
+            arrow.color.g = 0.65
+            arrow.color.b = 0.05
+            arrow.color.a = 1.0
+            visual.markers.append(arrow)
+            marker.controls.append(visual)
+
+            rotate = InteractiveMarkerControl()
+            rotate.name = "rotate_goal_yaw"
+            # ROTATE_AXIS uses control X. Rotate it onto positive map Z.
+            rotate.orientation.w = math.sqrt(0.5)
+            rotate.orientation.y = -math.sqrt(0.5)
+            rotate.orientation_mode = InteractiveMarkerControl.FIXED
+            rotate.interaction_mode = InteractiveMarkerControl.ROTATE_AXIS
+            rotate.always_visible = True
+            rotate.description = "Rotate Goal heading on map XY (preview only)"
+            marker.controls.append(rotate)
+        return marker
+
+    @staticmethod
+    def yaw_from_orientation(orientation):
+        values = (orientation.x, orientation.y, orientation.z, orientation.w)
+        if not all(math.isfinite(value) for value in values):
+            return None
+        norm = math.hypot(*values)
+        if not math.isfinite(norm) or norm < 1e-12:
+            return None
+        x, y, z, w = (value / norm for value in values)
+        return math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+    def goal_orientation(self):
+        return Quaternion(z=math.sin(self.goal_yaw / 2.0),
+                          w=math.cos(self.goal_yaw / 2.0))
+
+    def waypoint_world_pose(self, name, waypoint):
+        xyz = self.planner_to_world(waypoint)
+        pose = Pose()
+        pose.position.x, pose.position.y, pose.position.z = map(float, xyz)
+        pose.orientation = self.goal_orientation() if name == "goal" else Quaternion(w=1.0)
+        return pose
+
+    def update_interactive_marker_pose(self, name, waypoint):
+        if self.marker_server is not None:
+            self.marker_server.setPose(name, self.waypoint_world_pose(name, waypoint))
+            self.marker_server.applyChanges()
+
+    def publish_goal_heading_preview(self):
+        if self.goal_heading_pub is None or self.goal_pose is None:
+            return
+        message = PoseStamped()
+        message.header.frame_id = self.frame_id
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.pose = self.waypoint_world_pose("goal", self.goal_pose)
+        self.goal_heading_pub.publish(message)
+
+    def set_goal(self, x, y, z, plan=True, update_marker=True):
+        # Preserve the saved yaw when the parent snaps/updates the position.
+        success = super().set_goal(x, y, z, plan=False, update_marker=update_marker)
+        if success:
+            self.publish_goal_heading_preview()
+            if plan:
+                self.plan_current_waypoints()
+        return success
+
+    def interactive_marker_cb(self, feedback):
+        if feedback.marker_name == "goal" and feedback.control_name == "rotate_goal_yaw":
+            if feedback.event_type not in (
+                InteractiveMarkerFeedback.POSE_UPDATE,
+                InteractiveMarkerFeedback.MOUSE_UP,
+            ):
+                return
+            yaw = self.yaw_from_orientation(feedback.pose.orientation)
+            if yaw is None:
+                self.get_logger().warn("Ignoring Goal heading with invalid quaternion")
+                self.update_interactive_marker_pose("goal", self.goal_pose)
+                return
+            self.goal_yaw = yaw
+            # Rotation must neither re-snap the position nor trigger planning,
+            # even if plan_on_marker_release is enabled for translation.
+            self.update_interactive_marker_pose("goal", self.goal_pose)
+            self.publish_goal_heading_preview()
+            if feedback.event_type == InteractiveMarkerFeedback.MOUSE_UP:
+                self.get_logger().info(
+                    f"Goal heading saved: map yaw={math.degrees(yaw):.1f} deg "
+                    "(preview only; select Plan route separately)"
+                )
+            return
+        super().interactive_marker_cb(feedback)
 
     def odom_start_cb(self, message):
         """Field-compatible marker following with frame/finite checks."""
@@ -116,11 +270,32 @@ class PCTScanBridge(upstream_planner_node.PCTPlanner):
 
     def goal_pose_cb(self, message):
         if self.message_frame_matches(message, "goal"):
-            super().goal_pose_cb(message)
+            yaw = self.yaw_from_orientation(message.pose.orientation)
+            if yaw is None:
+                self.get_logger().warn("Ignoring goal pose with invalid quaternion")
+                return
+            previous_yaw = self.goal_yaw
+            self.goal_yaw = yaw
+            position = message.pose.position
+            # Keep the compatibility input's existing plan-on-message behavior.
+            if not self.set_goal(position.x, position.y, position.z):
+                self.goal_yaw = previous_yaw
+                if self.goal_pose is not None:
+                    self.update_interactive_marker_pose("goal", self.goal_pose)
 
     def clicked_point_cb(self, message):
         if self.message_frame_matches(message, "clicked point"):
             super().clicked_point_cb(message)
+
+    def build_path_message(self, traj_world):
+        message = super().build_path_message(traj_world)
+        if message.poses:
+            message.poses[-1].pose.orientation = self.goal_orientation()
+            self.get_logger().info(
+                f"Path terminal heading: map yaw={math.degrees(self.goal_yaw):.1f} deg "
+                "(terminal target heading)"
+            )
+        return message
 
     def plan_current_waypoints(self):
         # During the base constructor this attribute does not exist yet.  This

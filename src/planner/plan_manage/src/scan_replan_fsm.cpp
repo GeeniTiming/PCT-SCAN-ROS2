@@ -40,6 +40,9 @@ namespace scan_planner
     no_replan_thresh_ = load_parameter<double>(node_, "fsm.thresh_no_replan", -1.0);
     planning_horizon_ = load_parameter<double>(node_, "fsm.planning_horizon", -1.0);
     emergency_time_ = load_parameter<double>(node_, "fsm.emergency_time", 1.0);
+    odom_timeout_ = load_parameter<double>(node_, "fsm.odom_timeout", 0.5);
+    if (!std::isfinite(odom_timeout_) || odom_timeout_ <= 0.0)
+      throw std::runtime_error("fsm.odom_timeout must be finite and greater than zero");
     enable_fail_safe_ = load_parameter<bool>(node_, "fsm.fail_safe", true);
     max_replan_fail_count_ = load_parameter<int>(node_, "fsm.max_replan_fail_count", 1000);
     self_inflation_z_up_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_up", 0.0);
@@ -47,6 +50,10 @@ namespace scan_planner
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.0);
+    goal_yaw_tolerance_ = load_parameter<double>(node_, "fsm.goal_yaw_tolerance", 0.1);
+    if (!std::isfinite(goal_yaw_tolerance_) || goal_yaw_tolerance_ <= 0.0 ||
+        goal_yaw_tolerance_ >= M_PI)
+      throw std::runtime_error("fsm.goal_yaw_tolerance must be within (0, pi)");
     reference_path_min_distance_ =
         load_parameter<double>(node_, "fsm.reference_path_min_distance", 0.5);
     reference_path_simplify_tolerance_ =
@@ -374,9 +381,10 @@ namespace scan_planner
 
     std::vector<Eigen::Vector3d> waypoints;
     std::string path_error;
+    std::optional<double> terminal_yaw;
     if (!prepareReferenceWaypoints(*msg, body_height_, reference_path_min_distance_,
                                    waypoints, &path_error,
-                                   reference_path_simplify_tolerance_))
+                                   reference_path_simplify_tolerance_, &terminal_yaw))
     {
       RCLCPP_WARN(node_->get_logger(), "Ignoring initial_path: %s", path_error.c_str());
       return;
@@ -392,6 +400,16 @@ namespace scan_planner
 
     if (success)
     {
+      terminal_goal_yaw_ = terminal_yaw;
+      arrival_hold_ = false;
+      arrival_policy_.reset();
+      if (terminal_goal_yaw_)
+        RCLCPP_INFO(node_->get_logger(),
+                    "Reference terminal heading: map yaw=%.1f deg (alignment at destination)",
+                    *terminal_goal_yaw_ * 180.0 / M_PI);
+      else
+        RCLCPP_WARN(node_->get_logger(),
+                    "Reference terminal quaternion invalid; no terminal heading carried");
       /*** FSM ***/
       if (exec_state_ == WAIT_TARGET)
       {
@@ -434,7 +452,8 @@ namespace scan_planner
     odom_orient_.y() = msg->pose.pose.orientation.y;
     odom_orient_.z() = msg->pose.pose.orientation.z;
 
-    have_odom_ = true;
+    have_odom_ = odom_pos_.allFinite() && odom_vel_.allFinite();
+    last_odom_received_ = std::chrono::steady_clock::now();
     publishSelfInflationMarker();
     if (navi_mode_ == NAVI_MODE::PRESET_TARGET && !preset_started_)
     {
@@ -532,6 +551,11 @@ namespace scan_planner
     static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
+    // Diagnostic only: preserve the state transition and expose it to /rosout.
+    if (pre_s != int(new_state))
+      RCLCPP_INFO(node_->get_logger(), "FSM_TRANSITION: %s -> %s (%s)",
+                  state_str[pre_s].c_str(), state_str[int(new_state)].c_str(),
+                  pos_call.c_str());
     cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
   }
 
@@ -550,6 +574,112 @@ namespace scan_planner
   void SCANReplanFSM::execFSMCallback()
   {
     updateLocalTrajTimeFreeze();
+
+    const auto steady_now = std::chrono::steady_clock::now();
+    const double steady_s = std::chrono::duration<double>(steady_now.time_since_epoch()).count();
+    const double odom_age =
+        std::chrono::duration<double>(steady_now - last_odom_received_).count();
+    const bool odom_fresh = have_odom_ &&
+        odom_age <= odom_timeout_;
+    // Handle arrival in GEN/REPLAN too: the optimizer refuses sub-20cm trajectories.
+    const bool moving_task = have_target_ &&
+        (exec_state_ == GEN_NEW_TRAJ || exec_state_ == REPLAN_TRAJ || exec_state_ == EXEC_TRAJ);
+    if (moving_task) {
+      // Diagnostic only: report the real conditions before any branch changes.
+      const double diagnostic_distance = (end_pt_ - odom_pos_).head<2>().norm();
+      const double diagnostic_speed = odom_vel_.head<2>().norm();
+      const std::optional<double> diagnostic_goal_yaw =
+          navi_mode_ == NAVI_MODE::REFERENCE_PATH ? terminal_goal_yaw_ : std::nullopt;
+      geometry_msgs::msg::Quaternion diagnostic_orientation;
+      diagnostic_orientation.x = odom_orient_.x(); diagnostic_orientation.y = odom_orient_.y();
+      diagnostic_orientation.z = odom_orient_.z(); diagnostic_orientation.w = odom_orient_.w();
+      const auto diagnostic_current_yaw = terminalYawFromQuaternion(diagnostic_orientation);
+      const bool diagnostic_heading_ok = terminalHeadingReached(
+          diagnostic_goal_yaw, diagnostic_current_yaw, goal_yaw_tolerance_);
+      const char *diagnostic_wait = !odom_fresh ? "odom" :
+          !arrival_policy_.near(odom_fresh, diagnostic_distance) ? "position" :
+          !diagnostic_heading_ok ? "heading" :
+          (!std::isfinite(diagnostic_speed) || diagnostic_speed >= 0.05) ? "speed" : "settling";
+      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+          "ARRIVAL_STATUS: state=%d hold=%d aligning=%d wait=%s distance=%.3fm "
+          "goal_xy=(%.3f,%.3f) actual_xy=(%.3f,%.3f) target_yaw=%.2fdeg "
+          "actual_yaw=%.2fdeg yaw_error=%.2fdeg speed=%.3fm/s odom_age=%.3fs settle=%.3fs",
+          int(exec_state_), int(arrival_hold_), int(terminal_alignment_active_), diagnostic_wait,
+          diagnostic_distance, end_pt_.x(), end_pt_.y(), odom_pos_.x(), odom_pos_.y(),
+          diagnostic_goal_yaw.value_or(NAN) * 180.0 / M_PI,
+          diagnostic_current_yaw.value_or(NAN) * 180.0 / M_PI,
+          diagnostic_goal_yaw && diagnostic_current_yaw ?
+              std::remainder(*diagnostic_goal_yaw - *diagnostic_current_yaw, 2.0 * M_PI) * 180.0 / M_PI : NAN,
+          diagnostic_speed, odom_age,
+          arrival_policy_.since >= 0.0 ? steady_s - arrival_policy_.since : 0.0);
+      if (!odom_fresh) {
+        arrival_policy_.reset();
+        if (!arrival_hold_ || terminal_alignment_active_) {
+          RCLCPP_WARN(node_->get_logger(),
+                      "Odometry stale for %.3fs (limit %.3fs); publishing stop trajectory",
+                      odom_age, odom_timeout_);
+          callEmergencyStop(odom_pos_);
+          arrival_hold_ = true;
+        }
+        return;  // Never declare arrival from stale localization.
+      }
+      const double goal_distance = (end_pt_ - odom_pos_).head<2>().norm();
+      if (arrival_policy_.near(odom_fresh, goal_distance)) {
+        const std::optional<double> final_yaw =
+            navi_mode_ == NAVI_MODE::REFERENCE_PATH ? terminal_goal_yaw_ : std::nullopt;
+        if (!arrival_hold_ || (final_yaw && !terminal_alignment_active_)) {
+          callEmergencyStop(odom_pos_, final_yaw.has_value());
+          arrival_hold_ = true;
+          if (final_yaw)
+            RCLCPP_INFO(node_->get_logger(),
+                        "TERMINAL_ALIGN: position distance %.3fm, target yaw %.1f deg",
+                        goal_distance, *final_yaw * 180.0 / M_PI);
+        }
+        geometry_msgs::msg::Quaternion orientation;
+        orientation.x = odom_orient_.x(); orientation.y = odom_orient_.y();
+        orientation.z = odom_orient_.z(); orientation.w = odom_orient_.w();
+        if (!terminalHeadingReached(final_yaw, terminalYawFromQuaternion(orientation),
+                                    goal_yaw_tolerance_)) {
+          arrival_policy_.reset();
+          return; // Position alone cannot finish an oriented destination.
+        }
+        if (arrival_policy_.settled(odom_fresh, goal_distance,
+                                   odom_vel_.head<2>().norm(), steady_s)) {
+          arrival_hold_ = false;
+          arrival_policy_.reset();
+          if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size()) {
+            current_wp_++;
+            if (!planNextWaypoint()) {
+              need_hover_stop_ = true; flag_escape_emergency_ = true;
+              changeFSMExecState(EMERGENCY_STOP, "WAYPOINT_FAILED");
+              return;
+            }
+            changeFSMExecState(GEN_NEW_TRAJ, "ODOM_WAYPOINT_REACHED");
+          } else {
+            // Clear the alignment request after BOTH physical position and yaw
+            // have stayed within tolerance for the existing settling period.
+            callEmergencyStop(odom_pos_);
+            if (final_yaw)
+              RCLCPP_INFO(node_->get_logger(), "TERMINAL_ALIGN_COMPLETE: position and heading reached");
+            have_target_ = false;
+            active_waypoints_.clear();
+            current_wp_ = 0;
+            changeFSMExecState(WAIT_TARGET, "ODOM_GOAL_REACHED");
+          }
+        }
+        return;
+      }
+      arrival_policy_.reset();
+      if (arrival_hold_) {
+        RCLCPP_INFO(node_->get_logger(),
+                    "ARRIVAL_HOLD_EXIT: reason=outside_goal_range distance=%.3fm aligning=%d",
+                    goal_distance, int(terminal_alignment_active_));
+        arrival_hold_ = false;
+        changeFSMExecState(GEN_NEW_TRAJ, "ODOM_RESUME");
+      }
+    }
+    if ((exec_state_ == GEN_NEW_TRAJ || exec_state_ == REPLAN_TRAJ) &&
+        steady_now < next_retry_) return;
 
     static int fsm_num = 0;
     fsm_num++;
@@ -645,7 +775,7 @@ namespace scan_planner
       double t_cur = (time_now - info->start_time_).seconds();
       t_cur = min(info->duration_, t_cur);
 
-      Eigen::Vector3d pos = info->position_traj_.evaluateDeBoorT(t_cur);
+      Eigen::Vector3d pos = odom_pos_;
 
       if (isWaypointSequenceMode() &&
           current_wp_ + 1 < (int)active_waypoints_.size() &&
@@ -662,49 +792,10 @@ namespace scan_planner
         return;
       }
 
-      /* && (end_pt_ - pos).norm() < 0.5 */
       if (t_cur > info->duration_ - 1e-2)
       {
-        const auto &global_data = planner_manager_->global_data_;
-        const bool reference_path_has_next_window =
-            navi_mode_ == NAVI_MODE::REFERENCE_PATH &&
-            global_data.last_progress_time_ < global_data.global_duration_ - 1e-3;
-
-        // In reference-path mode, a local B-spline covers only one planning
-        // horizon.  Finishing that spline does not mean that the complete PCT
-        // route has been reached: request the next local window and keep the
-        // global target active.
-        if (reference_path_has_next_window)
-        {
-          RCLCPP_INFO(node_->get_logger(),
-                      "Local reference window complete (%.2f/%.2fs); continuing along the global path",
-                      global_data.last_progress_time_, global_data.global_duration_);
-          changeFSMExecState(REPLAN_TRAJ, "FSM");
-          return;
-        }
-
-        if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size())
-        {
-          current_wp_++;
-          if (planNextWaypoint())
-          {
-            changeFSMExecState(GEN_NEW_TRAJ, "FSM");
-            return;
-          }
-          replan_fail_count_++;
-          changeFSMExecState(GEN_NEW_TRAJ, "FSM");
-          return;
-        }
-
-        if (isWaypointSequenceMode())
-        {
-          active_waypoints_.clear();
-          current_wp_ = 0;
-        }
-
-        have_target_ = false;
-
-        changeFSMExecState(WAIT_TARGET, "FSM");
+        // Time expiry is not physical arrival. Preserve target and replan from odom.
+        changeFSMExecState(REPLAN_TRAJ, "TIME_EXPIRED_NOT_ARRIVED");
         return;
       }
       else if ((end_pt_ - pos).norm() < no_replan_thresh_)
@@ -759,6 +850,16 @@ namespace scan_planner
 
   void SCANReplanFSM::finishProcess()
   {
+    if (local_target_blocked_) {
+      local_target_blocked_ = false;
+      replan_fail_count_ = 0;
+      need_hover_stop_ = true;
+      flag_escape_emergency_ = true;
+      changeFSMExecState(EMERGENCY_STOP, "LOCAL_TARGET_BLOCKED");
+      return;
+    }
+    if (replan_fail_count_ > 0)
+      next_retry_ = std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
     if (replan_fail_count_ >= max_replan_fail_count_)
     {
       RCLCPP_WARN(node_->get_logger(),
@@ -781,9 +882,9 @@ namespace scan_planner
 
     if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
     {
-      start_pt_ = info->position_traj_.evaluateDeBoorT(t_cur);
-      start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
-      start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
+      start_pt_ = odom_pos_;
+      start_vel_ = odom_vel_;
+      start_acc_.setZero();
 
       bool success = callReboundReplan(false, false);
       if (!success)
@@ -801,8 +902,8 @@ namespace scan_planner
     }
 
     start_pt_ = odom_pos_;
-    start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
-    start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
+    start_vel_ = odom_vel_;
+    start_acc_.setZero();
 
     const Eigen::Vector2d to_goal = end_pt_.head<2>() - odom_pos_.head<2>();
     if (to_goal.norm() > 1e-3 && start_vel_.head<2>().dot(to_goal) < 0.0)
@@ -844,24 +945,7 @@ namespace scan_planner
     start_vel_ = odom_vel_;
     start_acc_.setZero();
 
-    LocalTrajData *info = &planner_manager_->local_data_;
-    if (info->start_time_.seconds() < 1e-5 || info->duration_ <= 1e-5)
-      return;
-
-    const double raw_t_cur = (node_->now() - info->start_time_).seconds();
-    if (raw_t_cur < -1e-3 || raw_t_cur > info->duration_ + 0.2)
-      return;
-
-    const double t_cur = std::min(std::max(raw_t_cur, 0.0), info->duration_);
-    start_vel_ = info->velocity_traj_.evaluateDeBoorT(t_cur);
-    start_acc_ = info->acceleration_traj_.evaluateDeBoorT(t_cur);
-
-    const Eigen::Vector2d to_goal = end_pt_.head<2>() - odom_pos_.head<2>();
-    if (to_goal.norm() > 1e-3 && start_vel_.head<2>().dot(to_goal) < 0.0)
-    {
-      start_vel_.setZero();
-      start_acc_.setZero();
-    }
+    // Use measured velocity; old spline derivatives are not robot feedback.
   }
 
   void SCANReplanFSM::checkCollisionCallback()
@@ -871,7 +955,9 @@ namespace scan_planner
     LocalTrajData *info = &planner_manager_->local_data_;
     auto map = planner_manager_->grid_map_;
 
-    if (exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
+    if (arrival_hold_ || !have_odom_ ||
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - last_odom_received_).count() > odom_timeout_ ||
+        exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
       return;
 
     /* ---------- check trajectory ---------- */
@@ -914,7 +1000,15 @@ namespace scan_planner
   bool SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
 
+    if (local_target_blocked_) return false;
     getLocalTarget();
+    if ((start_pt_ - local_target_pt_).norm() < 0.20) {
+      // A nearby LOCAL target does not imply arrival at the global destination.
+      local_target_blocked_ = true;
+      RCLCPP_WARN(node_->get_logger(),
+          "Local target too close while global goal is not reached; stopping instead of retrying");
+      return false;
+    }
 
     bool plan_success =
         planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_, (have_new_target_ || flag_use_poly_init), flag_randomPolyTraj);
@@ -951,6 +1045,10 @@ namespace scan_planner
         bspline.knots.push_back(knots(i));
       }
 
+      if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
+        encodeTerminalGoalYaw(bspline, terminal_goal_yaw_, info->duration_);
+      terminal_alignment_active_ = false;
+      // Ordinary local trajectories carry metadata but do not request alignment.
       bspline_pub_->publish(bspline);
 
       visualization_->displayOptimalTraj(info->position_traj_, 0);
@@ -959,8 +1057,9 @@ namespace scan_planner
     return plan_success;
   }
 
-  bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
+  bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos, bool terminal_align)
   {
+    terminal_alignment_active_ = terminal_align;
 
     planner_manager_->EmergencyStop(stop_pos);
 
@@ -990,6 +1089,10 @@ namespace scan_planner
       bspline.knots.push_back(knots(i));
     }
 
+    // Only the deliberate arrival hold carries yaw. Collision, stale odom
+    // and emergency-stop requests remain plain stops with no rotation.
+    if (terminal_align)
+      encodeTerminalGoalYaw(bspline, terminal_goal_yaw_, info->duration_);
     bspline_pub_->publish(bspline);
 
     return true;

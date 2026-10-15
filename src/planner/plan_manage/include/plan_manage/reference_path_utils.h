@@ -9,6 +9,7 @@
 
 #include <Eigen/Eigen>
 #include <nav_msgs/msg/path.hpp>
+#include <plan_manage/goal_heading_utils.h>
 
 namespace scan_planner
 {
@@ -84,9 +85,11 @@ inline bool prepareReferenceWaypoints(
     double min_distance,
     std::vector<Eigen::Vector3d> &waypoints,
     std::string *error = nullptr,
-    double simplify_tolerance = 0.0)
+    double simplify_tolerance = 0.0,
+    std::optional<double> *terminal_yaw = nullptr)
 {
   waypoints.clear();
+  if (terminal_yaw) terminal_yaw->reset();
   if (path.poses.empty())
   {
     if (error) *error = "reference path is empty";
@@ -137,6 +140,8 @@ inline bool prepareReferenceWaypoints(
   }
 
   waypoints = simplifyReferenceWaypoints(waypoints, simplify_tolerance);
+  if (terminal_yaw)
+    *terminal_yaw = terminalYawFromQuaternion(path.poses.back().pose.orientation);
   return true;
 }
 

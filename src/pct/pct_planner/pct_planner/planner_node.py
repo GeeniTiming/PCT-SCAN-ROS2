@@ -386,17 +386,21 @@ class PCTPlanner(Node):
         
         if traj_3d is not None:
             traj_world = self.planner_to_world(traj_3d)
-            path_msg = traj2ros(
-                traj_world,
-                frame_id=self.frame_id,
-                stamp=self.get_clock().now().to_msg(),
-            )
+            path_msg = self.build_path_message(traj_world)
             self.path_pub.publish(path_msg)
             self.get_logger().info(
                 f"Trajectory with {len(path_msg.poses)} poses published on {self.path_topic}"
             )
         else:
             self.get_logger().warn("Failed to generate trajectory")
+
+    def build_path_message(self, traj_world):
+        """Allow the integration bridge to attach goal metadata before publish."""
+        return traj2ros(
+            traj_world,
+            frame_id=self.frame_id,
+            stamp=self.get_clock().now().to_msg(),
+        )
 
     def publish_waypoint(self, publisher, waypoint):
         waypoint_world = self.planner_to_world(waypoint)
