@@ -1,8 +1,6 @@
 # PCT-SCAN-ROS2
 
-PCT-SCAN-ROS2 将 PCT 的跨层全局规划器与 SCAN 的局部轨迹规划器结合，可在 ROS 2
-Foxy 或 Humble 上运行。PCT 负责在 tomogram 层析图中选择楼层、楼梯和坡道，SCAN
-沿全局路线持续生成局部 B-spline。RViz 同时显示点云、路线和 Go2 运动动画。
+PCT-SCAN-ROS2 将 PCT 的跨层全局规划器与 SCAN 的局部轨迹规划器几何，用 ROS 2 Humble 运行。PCT 负责在 tomogram 层析图中选择楼层、楼梯和坡道，SCAN 沿全局路线持续生成局部 B-spline。RViz 同时显示点云、路线和 Go2 运动动画。
 
 本仓库仅用于验证PCT+SCAN导航算法，起点和终点由 RViz Interactive Marker 控制，Z 轴可以直接选择目标楼层。
 
@@ -52,16 +50,16 @@ PCT 提供跨楼层的全局拓扑与路线约束；SCAN 保留其滑动地图�
 
 ## 环境要求
 
-唯一部署基线：
+当前代码针对下面这套环境整理：
 
-- Ubuntu 20.04 + ROS 2 Foxy + Python 3.8（M20Pro，RK3588/aarch64）
-- Ubuntu 20.04 系统 CMake 3.16.3
-- GCC 9 的 C++17 编译器
+- Ubuntu 22.04
+- ROS 2 Humble
+- Python 3.10
+- GCC 11 或兼容的 C++17 编译器
 - RViz2
 
-RK3588 路径完全不依赖 CUDA、CuPy 或 Open3D。tomography ROS 节点使用 NumPy CPU
-后端，并能直接读取 PCL 常见的 ASCII/普通 binary PCD。板端构建和限制见
-[`docs/foxy_rk3588.md`](docs/foxy_rk3588.md)。
+Building 和 Plaza 不需要 CUDA。Spiral 的 tomogram 生成器会先检查 CUDA，GPU 不可用
+时改用 NumPy 和 SciPy。运行导航演示本身不需要 NVIDIA 显卡。
 
 ## 安装与环境部署
 
@@ -72,8 +70,8 @@ git clone https://github.com/yagami-light7/PCT-SCAN-ROS2.git
 cd PCT-SCAN-ROS2
 ```
 
-该分支的构建和启动脚本固定使用 `/opt/ros/foxy/setup.bash`，避免开发机上的其他
-ROS 环境意外进入板端产物。
+如果系统还没有 ROS 2 Humble，请先按照 ROS 2 官方文档完成桌面版安装。下面的命令
+默认 `/opt/ros/humble/setup.bash` 已经存在。
 
 ### 2. 安装 ROS 和系统依赖
 
@@ -81,37 +79,31 @@ ROS 环境意外进入板端产物。
 sudo apt update
 sudo apt install -y \
   build-essential cmake ninja-build git curl \
-  python3-colcon-common-extensions python3-rosdep python3-dev \
-  python3-numpy python3-scipy python3-pip python3-venv \
-  libboost-all-dev libeigen3-dev libopencv-dev libpcl-dev \
-  ros-foxy-pcl-conversions ros-foxy-cv-bridge \
-  ros-foxy-message-filters ros-foxy-tf2-geometry-msgs \
-  ros-foxy-interactive-markers ros-foxy-sensor-msgs-py \
-  ros-foxy-rclpy
+  python3-colcon-common-extensions python3-rosdep python3-dev python3-pip python3-venv \
+  libboost-all-dev libeigen3-dev \
+  libarmadillo-dev libglew-dev libglfw3-dev \
+  libgl1-mesa-dev libglu1-mesa-dev
 ```
 
-`src/simulator` 在板端被 `COLCON_IGNORE` 排除，因此不需要安装 Armadillo、GLEW、
-GLFW、Go2、Gazebo 或 RViz 仿真依赖。安装依赖后运行严格环境检查：
+第一次使用 rosdep 时先执行：
 
 ```bash
-source /opt/ros/foxy/setup.bash
-./scripts/verify_m20pro_baseline.sh --runtime
+sudo rosdep init
+rosdep update
 ```
 
-板端使用上面的显式清单，不要对包含厂商包和仿真包的整个 `nav_ws` 盲目执行
-`rosdep install`。
+如果 `rosdep init` 提示配置已经存在，直接执行 `rosdep update`。随后安装工作空间内
+各 ROS package 声明的依赖：
+
+```bash
+source /opt/ros/humble/setup.bash
+rosdep install --from-paths src --ignore-src -r -y
+```
 
 ### 3. 编译 PCT 原生依赖
 
-PCT 使用固定提交的 GTSAM 4.2、OSQP 1.0 和 pybind11 2.10.4。仓库脚本会下载源码并安装到
-`.deps/install`，不会改动 `/usr/local`，也不需要再 source 另一个 PCT 工作空间。
-OSQP 带有仓库维护的 CMake 3.16 兼容补丁，已经使用 Ubuntu 20.04 的 CMake 3.16.3
-验证；不需要升级系统 CMake。
-pybind11 同样使用私有安装，不依赖 M20Pro 固件是否提供 `pybind11_vendor`。
-
-构建脚本默认执行严格的 M20Pro 环境检查。只有在 CI 容器或配置了 aarch64 sysroot
-的交叉编译环境中，才可以显式设置 `PCT_ALLOW_NON_M20_HOST=1` 跳过宿主操作系统和
-架构检查；该选项不改变产物架构，也不能用于把 x86 `.so` 部署到机器狗。
+PCT 使用 GTSAM 4.2 和 OSQP 1.0。仓库脚本会下载源码并安装到 `.deps/install`，不会
+改动 `/usr/local`，也不需要再 source 另一个 PCT 工作空间。
 
 ```bash
 ./scripts/setup_pct_dependencies.sh
@@ -146,7 +138,7 @@ PCT_DEPS_ROOT=/path/to/deps ./scripts/build_workspace.sh
 先确认 ROS 能找到两个核心包：
 
 ```bash
-source /opt/ros/foxy/setup.bash
+source /opt/ros/humble/setup.bash
 source install/setup.bash
 ros2 pkg prefix pct_scan_bridge
 ros2 pkg prefix scan_planner
@@ -249,31 +241,6 @@ PCT-SCAN-ROS2/
 核心接口：PCT 发布 `/pct_path` (`nav_msgs/Path`)；SCAN Mode 3 订阅后进行三维 RDP
 简化和分段线性参考参数化，再发布 `planning/bspline`。分段线性参考用于守住楼梯和
 窄通道的全局走廊，平滑只由局部 B-spline 完成。
-
-真机定位导航时，bridge 可以在每次规划请求到来时从最新里程计自动更新 PCT 起点：
-
-```bash
-ros2 launch pct_scan_bridge pct_bridge.launch.py \
-  tomogram_path:=/absolute/path/to/scene.pickle \
-  rsg_root:=/absolute/path/to/scene_assets \
-  scene_name:=custom \
-  frame_id:=map \
-  coord_mode:=identity \
-  auto_start_from_odom:=true \
-  odom_topic:=/lightning/odom \
-  odom_timeout_sec:=0.5 \
-  goal_topic:=/goal_pose
-```
-
-bridge 只缓存 odometry，不会在每一帧定位更新时反复规划。收到 `/goal_pose` 或从
-交互 marker 选择 `Plan route` 时，它才截取当前位姿、吸附到 tomogram 可通行层并
-生成 `/pct_path`。缺少新鲜 odometry、frame 不是 `map`、坐标非有限值或当前位置
-无法吸附时会拒绝规划。手动调试可设置 `auto_start_from_odom:=false`，并通过独立的
-`/pct_start` 输入起点；不再占用常见的定位初始化话题 `/initialpose`。
-
-Lightning 的 odometry 表示 `lidar_link` 时，可用 `odom_start_z_offset` 补偿传感器
-到规划地面点的高度；默认 `0.0` 依靠 tomogram 就近吸附，真机楼梯测试前仍需实测
-外参。
 
 更完整的原理和调试过程见：
 

@@ -1,6 +1,7 @@
 
 #include <plan_manage/scan_replan_fsm.h>
 #include <plan_manage/reference_path_utils.h>
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -40,25 +41,22 @@ namespace scan_planner
     no_replan_thresh_ = load_parameter<double>(node_, "fsm.thresh_no_replan", -1.0);
     planning_horizon_ = load_parameter<double>(node_, "fsm.planning_horizon", -1.0);
     emergency_time_ = load_parameter<double>(node_, "fsm.emergency_time", 1.0);
-    odom_timeout_ = load_parameter<double>(node_, "fsm.odom_timeout", 0.5);
-    if (!std::isfinite(odom_timeout_) || odom_timeout_ <= 0.0)
-      throw std::runtime_error("fsm.odom_timeout must be finite and greater than zero");
     enable_fail_safe_ = load_parameter<bool>(node_, "fsm.fail_safe", true);
     max_replan_fail_count_ = load_parameter<int>(node_, "fsm.max_replan_fail_count", 1000);
+    odom_lost_timeout_ = load_parameter<double>(node_, "fsm.odom_lost_timeout", 2.0);
     self_inflation_z_up_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_up", 0.0);
     self_inflation_z_down_ = load_parameter<double>(node_, "grid_map.obstacles_inflation_z_down", 0.0);
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.0);
-    goal_yaw_tolerance_ = load_parameter<double>(node_, "fsm.goal_yaw_tolerance", 0.1);
-    if (!std::isfinite(goal_yaw_tolerance_) || goal_yaw_tolerance_ <= 0.0 ||
-        goal_yaw_tolerance_ >= M_PI)
-      throw std::runtime_error("fsm.goal_yaw_tolerance must be within (0, pi)");
     reference_path_min_distance_ =
         load_parameter<double>(node_, "fsm.reference_path_min_distance", 0.5);
     reference_path_simplify_tolerance_ =
         load_parameter<double>(node_, "fsm.reference_path_simplify_tolerance", 0.0);
     self_inflation_frame_id_ = load_parameter<std::string>(node_, "grid_map.frame_id", "world");
+    enable_goal_yaw_ = load_parameter<bool>(node_, "fsm.enable_goal_yaw", false);
+    terminal_yaw_rate_ = load_parameter<double>(node_, "fsm.terminal_yaw_rate", 0.7);
+    terminal_blend_min_dist_ = load_parameter<double>(node_, "fsm.terminal_blend_min_dist", 0.5);
 
     std::string odom_topic = load_parameter<std::string>(node_, "fsm.odom_topic", "body_pose");
     std::string frozen_topic =
@@ -381,7 +379,7 @@ namespace scan_planner
 
     std::vector<Eigen::Vector3d> waypoints;
     std::string path_error;
-    std::optional<double> terminal_yaw;
+    double terminal_yaw = std::numeric_limits<double>::quiet_NaN();
     if (!prepareReferenceWaypoints(*msg, body_height_, reference_path_min_distance_,
                                    waypoints, &path_error,
                                    reference_path_simplify_tolerance_, &terminal_yaw))
@@ -389,6 +387,8 @@ namespace scan_planner
       RCLCPP_WARN(node_->get_logger(), "Ignoring initial_path: %s", path_error.c_str());
       return;
     }
+    goal_yaw_ = terminal_yaw;
+    goal_yaw_valid_ = std::isfinite(goal_yaw_);
 
     RCLCPP_INFO(node_->get_logger(),
                 "Reference path reduced from %zu poses to %zu trajectory waypoints",
@@ -400,16 +400,6 @@ namespace scan_planner
 
     if (success)
     {
-      terminal_goal_yaw_ = terminal_yaw;
-      arrival_hold_ = false;
-      arrival_policy_.reset();
-      if (terminal_goal_yaw_)
-        RCLCPP_INFO(node_->get_logger(),
-                    "Reference terminal heading: map yaw=%.1f deg (alignment at destination)",
-                    *terminal_goal_yaw_ * 180.0 / M_PI);
-      else
-        RCLCPP_WARN(node_->get_logger(),
-                    "Reference terminal quaternion invalid; no terminal heading carried");
       /*** FSM ***/
       if (exec_state_ == WAIT_TARGET)
       {
@@ -497,6 +487,71 @@ namespace scan_planner
     return std::atan2(diff(1), diff(0));
   }
 
+  void SCANReplanFSM::appendYawProfile(scan_planner_msgs::msg::Bspline &bspline,
+                                       const LocalTrajData *info)
+  {
+    if (info == nullptr)
+      return;
+    if (navi_mode_ != NAVI_MODE::REFERENCE_PATH)
+      return;
+
+    if (node_ != nullptr)
+    {
+      // Re-read every replan so `ros2 param set fsm.enable_goal_yaw ...` takes
+      // effect without restarting the node.
+      enable_goal_yaw_ = load_parameter<bool>(node_, "fsm.enable_goal_yaw", false);
+      terminal_yaw_rate_ = load_parameter<double>(node_, "fsm.terminal_yaw_rate", 0.7);
+      terminal_blend_min_dist_ = load_parameter<double>(node_, "fsm.terminal_blend_min_dist", 0.5);
+    }
+
+    // Zero regression when disabled: leave yaw_pts empty so the controllers fall
+    // back to their original tangent / look-ahead behaviour.
+    if (!enable_goal_yaw_ || !goal_yaw_valid_)
+      return;
+
+    UniformBspline pos_traj = info->position_traj_; // copy: getDerivative() is non-const
+    const double duration = pos_traj.getTimeSum();
+    if (duration <= 1e-3)
+      return;
+    UniformBspline vel_traj = pos_traj.getDerivative();
+
+    const int N = std::max(2, static_cast<int>(std::ceil(duration / 0.1)) + 1);
+    const double yaw_dt = duration / (N - 1);
+
+    double prev = getOdomYaw();
+
+    // Spread the terminal rotation over S_blend metres so the robot turns while
+    // it still moves, reaching goal_yaw_ exactly at the end of the trajectory.
+    const Eigen::Vector3d end_point = pos_traj.evaluateDeBoorT(duration);
+    const double tangent_at_end = estimateYawFromSegment(odom_pos_, end_point);
+    const double dpsi = std::remainder(goal_yaw_ - tangent_at_end, 2.0 * M_PI);
+    const double v0 = vel_traj.evaluateDeBoorT(0.0).head<2>().norm();
+    const double S_blend = std::max(v0 * std::abs(dpsi) / std::max(terminal_yaw_rate_, 1e-6),
+                                    terminal_blend_min_dist_);
+
+    bspline.yaw_pts.clear();
+    bspline.yaw_pts.reserve(N);
+    for (int k = 0; k < N; ++k)
+    {
+      const double t = k * yaw_dt;
+      const Eigen::Vector3d vel = vel_traj.evaluateDeBoorT(t);
+      double yaw = (vel.head<2>().squaredNorm() > 1e-8)
+                       ? std::atan2(vel.y(), vel.x())
+                       : prev;
+      // Remaining distance to the global goal drives the blend, so yaw_pts only
+      // converges to goal_yaw_ once the local trajectory reaches the goal.
+      const Eigen::Vector3d p = pos_traj.evaluateDeBoorT(t);
+      const double r = (p.head<2>() - end_pt_.head<2>()).norm();
+      const double frac = std::clamp(1.0 - r / S_blend, 0.0, 1.0);
+      yaw += std::remainder(goal_yaw_ - yaw, 2.0 * M_PI) * frac;
+      if (k == 0)
+        yaw = prev; // align the start of the profile with the current heading
+      bspline.yaw_pts.push_back(yaw);
+      prev = yaw;
+    }
+    bspline.yaw_dt = yaw_dt;
+  }
+
   void SCANReplanFSM::publishSelfInflationMarker()
   {
     const double radius = std::max(0.0, self_double_cylinder_radius_);
@@ -551,11 +606,6 @@ namespace scan_planner
     static string state_str[7] = {"INIT", "WAIT_TARGET", "GEN_NEW_TRAJ", "REPLAN_TRAJ", "EXEC_TRAJ", "EMERGENCY_STOP"};
     int pre_s = int(exec_state_);
     exec_state_ = new_state;
-    // Diagnostic only: preserve the state transition and expose it to /rosout.
-    if (pre_s != int(new_state))
-      RCLCPP_INFO(node_->get_logger(), "FSM_TRANSITION: %s -> %s (%s)",
-                  state_str[pre_s].c_str(), state_str[int(new_state)].c_str(),
-                  pos_call.c_str());
     cout << "[" + pos_call + "]: from " + state_str[pre_s] + " to " + state_str[int(new_state)] << endl;
   }
 
@@ -578,71 +628,25 @@ namespace scan_planner
     const auto steady_now = std::chrono::steady_clock::now();
     const double steady_s = std::chrono::duration<double>(steady_now.time_since_epoch()).count();
     const double odom_age =
-        std::chrono::duration<double>(steady_now - last_odom_received_).count();
-    const bool odom_fresh = have_odom_ &&
-        odom_age <= odom_timeout_;
+        have_odom_ ? std::chrono::duration<double>(steady_now - last_odom_received_).count() : 1e9;
+    const bool odom_fresh = odom_age <= 0.5;              // 仅用于“到点判定”的新鲜度
+    const bool odom_lost = odom_age > odom_lost_timeout_;  // 真正的定位丢失
     // Handle arrival in GEN/REPLAN too: the optimizer refuses sub-20cm trajectories.
     const bool moving_task = have_target_ &&
         (exec_state_ == GEN_NEW_TRAJ || exec_state_ == REPLAN_TRAJ || exec_state_ == EXEC_TRAJ);
     if (moving_task) {
-      // Diagnostic only: report the real conditions before any branch changes.
-      const double diagnostic_distance = (end_pt_ - odom_pos_).head<2>().norm();
-      const double diagnostic_speed = odom_vel_.head<2>().norm();
-      const std::optional<double> diagnostic_goal_yaw =
-          navi_mode_ == NAVI_MODE::REFERENCE_PATH ? terminal_goal_yaw_ : std::nullopt;
-      geometry_msgs::msg::Quaternion diagnostic_orientation;
-      diagnostic_orientation.x = odom_orient_.x(); diagnostic_orientation.y = odom_orient_.y();
-      diagnostic_orientation.z = odom_orient_.z(); diagnostic_orientation.w = odom_orient_.w();
-      const auto diagnostic_current_yaw = terminalYawFromQuaternion(diagnostic_orientation);
-      const bool diagnostic_heading_ok = terminalHeadingReached(
-          diagnostic_goal_yaw, diagnostic_current_yaw, goal_yaw_tolerance_);
-      const char *diagnostic_wait = !odom_fresh ? "odom" :
-          !arrival_policy_.near(odom_fresh, diagnostic_distance) ? "position" :
-          !diagnostic_heading_ok ? "heading" :
-          (!std::isfinite(diagnostic_speed) || diagnostic_speed >= 0.05) ? "speed" : "settling";
-      RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-          "ARRIVAL_STATUS: state=%d hold=%d aligning=%d wait=%s distance=%.3fm "
-          "goal_xy=(%.3f,%.3f) actual_xy=(%.3f,%.3f) target_yaw=%.2fdeg "
-          "actual_yaw=%.2fdeg yaw_error=%.2fdeg speed=%.3fm/s odom_age=%.3fs settle=%.3fs",
-          int(exec_state_), int(arrival_hold_), int(terminal_alignment_active_), diagnostic_wait,
-          diagnostic_distance, end_pt_.x(), end_pt_.y(), odom_pos_.x(), odom_pos_.y(),
-          diagnostic_goal_yaw.value_or(NAN) * 180.0 / M_PI,
-          diagnostic_current_yaw.value_or(NAN) * 180.0 / M_PI,
-          diagnostic_goal_yaw && diagnostic_current_yaw ?
-              std::remainder(*diagnostic_goal_yaw - *diagnostic_current_yaw, 2.0 * M_PI) * 180.0 / M_PI : NAN,
-          diagnostic_speed, odom_age,
-          arrival_policy_.since >= 0.0 ? steady_s - arrival_policy_.since : 0.0);
       if (!odom_fresh) {
-        arrival_policy_.reset();
-        if (!arrival_hold_ || terminal_alignment_active_) {
-          RCLCPP_WARN(node_->get_logger(),
-                      "Odometry stale for %.3fs (limit %.3fs); publishing stop trajectory",
-                      odom_age, odom_timeout_);
-          callEmergencyStop(odom_pos_);
-          arrival_hold_ = true;
+        // 短暂掉帧（odom 间隔偶尔 >0.5s）不发停车、不重规划，控制器继续跟随旧轨迹；
+        // 只有定位真正丢失（超过 fsm.odom_lost_timeout）才急停。
+        if (odom_lost) {
+          arrival_policy_.reset();
+          if (!arrival_hold_) { callEmergencyStop(odom_pos_); arrival_hold_ = true; }
         }
         return;  // Never declare arrival from stale localization.
       }
       const double goal_distance = (end_pt_ - odom_pos_).head<2>().norm();
       if (arrival_policy_.near(odom_fresh, goal_distance)) {
-        const std::optional<double> final_yaw =
-            navi_mode_ == NAVI_MODE::REFERENCE_PATH ? terminal_goal_yaw_ : std::nullopt;
-        if (!arrival_hold_ || (final_yaw && !terminal_alignment_active_)) {
-          callEmergencyStop(odom_pos_, final_yaw.has_value());
-          arrival_hold_ = true;
-          if (final_yaw)
-            RCLCPP_INFO(node_->get_logger(),
-                        "TERMINAL_ALIGN: position distance %.3fm, target yaw %.1f deg",
-                        goal_distance, *final_yaw * 180.0 / M_PI);
-        }
-        geometry_msgs::msg::Quaternion orientation;
-        orientation.x = odom_orient_.x(); orientation.y = odom_orient_.y();
-        orientation.z = odom_orient_.z(); orientation.w = odom_orient_.w();
-        if (!terminalHeadingReached(final_yaw, terminalYawFromQuaternion(orientation),
-                                    goal_yaw_tolerance_)) {
-          arrival_policy_.reset();
-          return; // Position alone cannot finish an oriented destination.
-        }
+        if (!arrival_hold_) { callEmergencyStop(odom_pos_); arrival_hold_ = true; }
         if (arrival_policy_.settled(odom_fresh, goal_distance,
                                    odom_vel_.head<2>().norm(), steady_s)) {
           arrival_hold_ = false;
@@ -656,11 +660,6 @@ namespace scan_planner
             }
             changeFSMExecState(GEN_NEW_TRAJ, "ODOM_WAYPOINT_REACHED");
           } else {
-            // Clear the alignment request after BOTH physical position and yaw
-            // have stayed within tolerance for the existing settling period.
-            callEmergencyStop(odom_pos_);
-            if (final_yaw)
-              RCLCPP_INFO(node_->get_logger(), "TERMINAL_ALIGN_COMPLETE: position and heading reached");
             have_target_ = false;
             active_waypoints_.clear();
             current_wp_ = 0;
@@ -671,9 +670,6 @@ namespace scan_planner
       }
       arrival_policy_.reset();
       if (arrival_hold_) {
-        RCLCPP_INFO(node_->get_logger(),
-                    "ARRIVAL_HOLD_EXIT: reason=outside_goal_range distance=%.3fm aligning=%d",
-                    goal_distance, int(terminal_alignment_active_));
         arrival_hold_ = false;
         changeFSMExecState(GEN_NEW_TRAJ, "ODOM_RESUME");
       }
@@ -956,7 +952,7 @@ namespace scan_planner
     auto map = planner_manager_->grid_map_;
 
     if (arrival_hold_ || !have_odom_ ||
-        std::chrono::duration<double>(std::chrono::steady_clock::now() - last_odom_received_).count() > odom_timeout_ ||
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - last_odom_received_).count() > 0.5 ||
         exec_state_ == WAIT_TARGET || info->start_time_.seconds() < 1e-5)
       return;
 
@@ -1045,10 +1041,7 @@ namespace scan_planner
         bspline.knots.push_back(knots(i));
       }
 
-      if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
-        encodeTerminalGoalYaw(bspline, terminal_goal_yaw_, info->duration_);
-      terminal_alignment_active_ = false;
-      // Ordinary local trajectories carry metadata but do not request alignment.
+      appendYawProfile(bspline, info);
       bspline_pub_->publish(bspline);
 
       visualization_->displayOptimalTraj(info->position_traj_, 0);
@@ -1057,9 +1050,8 @@ namespace scan_planner
     return plan_success;
   }
 
-  bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos, bool terminal_align)
+  bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
   {
-    terminal_alignment_active_ = terminal_align;
 
     planner_manager_->EmergencyStop(stop_pos);
 
@@ -1089,10 +1081,6 @@ namespace scan_planner
       bspline.knots.push_back(knots(i));
     }
 
-    // Only the deliberate arrival hold carries yaw. Collision, stale odom
-    // and emergency-stop requests remain plain stops with no rotation.
-    if (terminal_align)
-      encodeTerminalGoalYaw(bspline, terminal_goal_yaw_, info->duration_);
     bspline_pub_->publish(bspline);
 
     return true;

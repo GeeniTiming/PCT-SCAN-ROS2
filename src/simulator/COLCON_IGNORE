@@ -1,3 +1,0 @@
-Simulation, Go2 visualization, OpenGL sensing, RViz and synthetic map tools
-are intentionally excluded from the RK3588 deployment build. The M20Pro uses
-Lightning-LM odometry/point clouds and its own motion-control bridge.

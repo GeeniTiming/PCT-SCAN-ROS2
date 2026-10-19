@@ -1,57 +1,138 @@
-# M20Pro + Lightning-LM 专用 closed_loop_controller 配置（单文件启动，无需 -r 重映射）
+# ============================================================================
+# M20Pro + Lightning-LM 专用控制器配置（单文件启动，无需 -r 重映射）
+#
+# 真机只用 closed_loop_controller；其余 open_loop_controller /
+# go2_kinematic_sim / go2_gait_publisher 都是仿真用，真机不要启动。
+# install 下本文件是软链接，改这里等于改源码：
+#   src/planner/plan_manage/config/controllers_lightning.yaml
+# 改完必须重启对应节点才生效。
+# ============================================================================
+
+# ---------------------------------------------------------------------------
+# 一、闭环控制器（真机使用）closed_loop_controller.cpp
+#     订阅 /planning/bspline 与 /lightning/odom，做闭环跟踪：
+#     航向误差大时先原地转向（并冻结规划器时钟），否则输出 body 系速度
+# ---------------------------------------------------------------------------
 closed_loop_controller:
   ros__parameters:
+    # 使用仿真时钟：真机 false；回放 bag / 仿真 true
     use_sim_time: false
+    # 里程计话题：只用 pose.pose(位置+四元数)；其 frame_id=map，与轨迹一致
     odom_topic: /lightning/odom
+    # 局部轨迹输入(scan_planner_msgs/Bspline)
     bspline_topic: /planning/bspline
+    # 速度指令输出(geometry_msgs/Twist)，再经 cmd_vel_to_nav_cmd 转到 /NAV_CMD
     cmd_vel_topic: /cmd_vel
+    # 与规划器互传的“冻结”标志(std_msgs/Bool)：原地转向时为 true，
+    # 规划器据此暂停自己的轨迹时钟（scan_replan_fsm.cpp:451-463）
     frozen_topic: /planning/go2_execution_frozen
-    time_forward: 0.8
-    heading_error_threshold: 0.8
-    kp_pos: 0.8
-    kp_yaw: 1.5
-    max_vx: 0.3
-    max_vy: 0.2
-    max_vyaw: 0.6
-    finish_dist: 0.15
 
+    # 【重要】航向前视时间(s)：取 traj(t + time_forward) - traj(t) 的方向作为期望航向。
+    # 实际前视距离 ≈ 速度 × 该值（0.3 m/s × 0.8 s ≈ 0.24 m）。
+    # 太小 → 方向抖、易左右摆；太大会“抄近路”切弯
+    time_forward: 2.0
+    # 【重要】航向误差门限(rad)：|误差| > 该值时判定“没对准”，
+    # 只发角速度、不发直线速度（原地转向），并置 frozen=true。
+    # 0.8 rad ≈ 46°；调小更严格但可能长时间转不出去
+    heading_error_threshold: 0.8
+    # 【重要】位置环比例增益：vel_world = vel_des + kp_pos * (pos_des - odom)。
+    # 纯 P、无阻尼。过冲量超过 max_vx/kp_pos 就会命令倒车（当前 0.3/0.8≈0.375 m），
+    # 是“走一截回退一小截”的直接来源。调小可明显抑制倒车
+    kp_pos: 1.0
+    # 航向环比例增益：angular.z = clamp(kp_yaw * yaw_error, ±max_vyaw)。
+    # 同样纯 P、无阻尼；kp_yaw 过大 + odom 延迟会导致左右摇头
+    kp_yaw: 1.5
+    # 【重要】位置环速度阻尼增益：vel_world = vel_des + kp_pos*pos_err
+    #   - kd_pos*(odom_vel - vel_des)，用 odom 的 map 系速度抑制过冲。
+    # 0=关闭（退化为纯 P，会“走一截回退一小截”）。推荐 0.8~1.5；
+    # 太大在 2.5Hz odom 延迟下可能引入抖动
+    kd_pos: 0.2
+    # 航向环阻尼增益：- kd_yaw * odom_yaw_rate（yaw_rate 由相邻 odom 差分得到）。
+    # 0=关闭（默认，保持原航向行为）；想进一步压扭头可试 0.2~0.5
+    kd_yaw: 0.0
+    # 【重要】body 系前进速度上限(m/s)：应 ≤ 规划速度(manager/optimization.max_vel)。
+    # 控制器硬钳制，参考比它快就会持续追不上/过冲
+    max_vx: 0.5
+    # body 系横向速度上限(m/s)：四足/底盘需支持真侧移，否则仅作补偿用
+    max_vy: 0.5
+    # 【重要】偏航角速度上限(rad/s)：代码内还会再硬钳到 1.0。
+    # 调小更稳但转向更慢；调大更灵活但易过冲摆动
+    max_vyaw: 0.6
+    # 到点判定距离(m)：轨迹走完且位置误差小于该值才发零速停住
+    finish_dist: 0.10
+    # 【终点朝向】收尾转向容差(rad)：有 yaw 曲线时，位置到位但航向误差大于
+    # 该值则原地转完再停，避免停在未对准目标朝向的姿态
+    finish_yaw_tolerance: 0.10
+
+# ---------------------------------------------------------------------------
+# 二、开环控制器（仅仿真）open_loop_controller.cpp
+#     不开 cmd_vel，只按 B 样条回灌一条“假 odom”到 body_pose，
+#     用于纯仿真链路。真机启用它会与 /lightning/odom 抢 odom
+# ---------------------------------------------------------------------------
 open_loop_controller:
   ros__parameters:
     use_sim_time: false
+    # 假 odom 的父/子坐标系名（真机 odom 是 map->lidar_link）
     frame_id: world
     child_frame_id: base
+    # 假 odom 发布频率(Hz)
     publish_rate: 100.0
+    # 偏航保持速度阈值(m/s)：轨迹速度低于该值时不再更新 yaw，避免噪声抖动
     yaw_min_speed: 0.05
+    # 轨迹走完后是否继续保持/发布终点位姿（false=直接停发）
     hold_final_position: true
+    # 假 odom 的初始位姿
     init_x: -19.0
     init_y: 1.0
     init_z: 0.3
     init_yaw: 0.0
 
+# ---------------------------------------------------------------------------
+# 三、运动学仿真器（仅仿真）go2_kinematic_sim.cpp
+#     订阅 /cmd_vel 做积分，发布 body_pose 与可选 TF。真机不要启动
+# ---------------------------------------------------------------------------
 go2_kinematic_sim:
   ros__parameters:
     use_sim_time: false
+    # 仿真机器人初始位姿
     init_x: -19.0
     init_y: 1.0
     init_z: 0.3
     init_yaw: 0.0
+    # 仿真器对 /cmd_vel 的速度钳制(m/s, m/s, rad/s)；yaw 会再硬钳到 1.0
     max_vx: 0.75
     max_vy: 0.35
     max_vyaw: 1.0
+    # 指令超时(s)：超过该时间没收到 /cmd_vel 就按零速处理（安全停车）
     cmd_timeout: 0.3
+    # 仿真积分/发布频率(Hz)
     sim_rate: 100.0
+    # 是否发布 map->base 的 TF
     publish_tf: true
+    # 仿真 odom 的父/子坐标系名
     frame_id: world
     child_frame_id: base
 
+# ---------------------------------------------------------------------------
+# 四、四足步态发布器（仅仿真）go2_gait_publisher.cpp
+#     根据 body_pose 的速度生成 12 个关节的 joint_states（trot 步态），
+#     仅供 RViz/物理仿真看形态。真机不要启动
+# ---------------------------------------------------------------------------
 go2_gait_publisher:
   ros__parameters:
     use_sim_time: false
+    # joint_states 发布频率(Hz)
     rate: 60.0
+    # 步态频率(Hz)：一个完整 trot 周期的频率，越大腿摆越快
     gait_frequency: 2.2
+    # 起步速度/最大速度(m/s)：用于把速度映射成步幅比例 ratio
+    #   ratio = clamp((speed - min)/(max - min), 0, 1)；speed<min 时站立不动
     min_walk_speed: 0.05
     max_walk_speed: 1.0
+    # 是否强制 trot（true=忽略速度，始终按固定 ratio=0.45 迈步）
     always_trot: false
+    # 三个关节的摆动幅度(rad)：hip 髋侧摆 / thigh 大腿 / calf 小腿
+    # 调大步伐更大，过大会触碰关节限位（fillLeg 内有 clamp）
     hip_swing: 0.08
     thigh_swing: 0.32
     calf_swing: 0.42

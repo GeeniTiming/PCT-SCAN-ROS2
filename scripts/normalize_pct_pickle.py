@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Rewrite a PCT pickle so ROS 2 Foxy's system NumPy can load it.
+"""Rewrite a PCT pickle so ROS 2 Humble's system NumPy can load it.
 
 Some upstream tomograms were serialized by NumPy 2 and reference the private
-``numpy._core`` module. Ubuntu 20.04 ships NumPy 1.x, so planning should use a
+``numpy._core`` module. Ubuntu 22.04 ships NumPy 1.x, so planning should use a
 portable pickle written by ``/usr/bin/python3`` instead of changing ROS's
 Python environment.
 """

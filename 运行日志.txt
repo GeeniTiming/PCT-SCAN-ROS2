@@ -1,0 +1,178 @@
+sudo apt update
+sudo apt install -y \
+  build-essential cmake ninja-build git curl \
+  python3-colcon-common-extensions python3-rosdep python3-dev python3-pip python3-venv \
+  libboost-all-dev libeigen3-dev libarmadillo-dev libglew-dev libglfw3-dev \
+  libgl1-mesa-dev libglu1-mesa-dev \
+  ros-foxy-sensor-msgs-py
+
+
+sed -i 's|/opt/ros/humble|/opt/ros/foxy|g' scripts/build_workspace.sh scripts/_pct_scan_env.sh
+
+
+source /opt/ros/foxy/setup.bash
+sudo rosdep init        # 已初始化则跳过
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y \
+  --skip-keys "gz_ros2_control ros_gz_bridge ros_gz_interfaces ros_gz_sim"
+
+./scripts/setup_pct_dependencies.sh
+# 内存充足可提高并行度：
+# PCT_BUILD_JOBS=6 ./scripts/setup_pct_dependencies.sh
+
+# 遇到cmake问题
+python3 -m pip install --user --upgrade "cmake==3.31.6"
+export PATH="$HOME/.local/bin:$PATH"
+cmake --version   # 应显示 3.31.6
+
+
+
+2026年9月3日编译
+构建工作空间
+./scripts/build_workspace.sh
+source install/setup.bash
+
+
+2026年9月3日编译完成
+验证
+su
+cd /home/user/third_party/pct_Scanner/PCT-SCAN-ROS2
+source install/setup.bash
+./scripts/launch_pct_scan_building.sh plan_on_startup:=true
+
+
+./scripts/test_pct_building_astar.sh --force
+# 打印 [astar] PASS 即说明 PCT 原生库、pickle、Python bridge 均已连通
+
+
+========================================================
+2026-09-03  Foxy 环境编译问题总结
+========================================================
+
+环境: Ubuntu 20.04 + ROS 2 Foxy + Python 3.8
+仓库按 Humble 编写, 移植到 Foxy 共遇到以下问题:
+
+[1] 磁盘空间不足
+    现象: .deps/src/osqp-1.0.0 克隆成功但 checkout 失败 "No space left on device"
+    处理: 释放磁盘(至少6G), 删除损坏目录后重跑 setup_pct_dependencies.sh
+          rm -rf .deps/src/osqp-1.0.0
+
+[2] CMake 版本
+    现象a: OSQP v1.0.0 要求 CMake>=3.18, Ubuntu20.04 自带 3.16.3 -> 配置失败
+    处理a: python3 -m pip install --user --upgrade "cmake==3.31.6"
+          export PATH="$HOME/.local/bin:$PATH"
+    现象b: 升到 cmake 4.x 后 GTSAM 顶层 cmake_minimum_required(VERSION 3.0)
+          报 "Compatibility with CMake < 3.5 has been removed"
+    处理b: 固定用 3.31.x(最后支持旧 min 版本的 3.x), 不要装 4.x
+
+[3] rosdep 解析失败项 (Foxy 无对应 rosdep key 或未安装)
+    - gz_ros2_control / ros_gz_bridge / ros_gz_interfaces / ros_gz_sim
+      (仅 go2_description 可选 Gazebo 仿真需要, 演示不需要) -> --skip-keys
+    - sensor_msgs_py: Humble 内置, Foxy 需手动 apt: ros-foxy-sensor-msgs-py
+    - pybind11_vendor: pct_planner/CMakeLists.txt 显式 find_package, 未装导致失败
+      -> sudo apt install -y ros-foxy-pybind11-vendor
+    - xacro: 运行 launch 时 "file not found: 'xacro'"
+      -> sudo apt install -y ros-foxy-xacro
+
+[4] Foxy rclcpp 订阅回调形参 (源码修改)
+    根因: Foxy 的 extract_message_type 不做 remove_reference,
+          形参写 const X::ConstSharedPtr& 时 CallbackMessageT 被推导成引用类型,
+          MessageMemoryStrategy 以引用类型实例化 std::shared_ptr,
+          GCC9 报 "no member named '_M_ptr'" (Humble 无此问题)
+    处理: 回调形参改为按值传 ConstSharedPtr (仅增引用计数, 语义不变), 共8处:
+          - src/planner/plan_env/include/plan_env/grid_map.h / src/grid_map.cpp
+            (sensorPoseCallback, slidingMapFrameCallback, cloudCallback;
+             depthPoseCallback 走 message_filters 不用改)
+          - src/planner/plan_manage/include/plan_manage/scan_replan_fsm.h /
+            src/scan_replan_fsm.cpp
+            (rvizGoalCallback, waypointCallback, pathCallback,
+             odometryCallback, go2ExecutionFrozenCallback)
+
+[5] plan_env 导出接口泄漏 FLANN::FLANN (源码修改)
+    根因: plan_env 链接 ${PCL_LIBRARIES}(含 FLANN::FLANN), 但
+          ament_export_dependencies 未导出 PCL/OpenCV, 下游 find_package(plan_env)
+          时 FLANN::FLANN 未定义 -> "The link interface of target ... contains
+          FLANN::FLANN but the target was not found"
+          影响所有依赖 plan_env 的包(path_searching/bspline_opt/traj_utils/
+          scan_planner/mockamap/local_sensing/map_generator)
+    处理: src/planner/plan_env/CMakeLists.txt 的 ament_export_dependencies
+          追加 OpenCV PCL
+
+[6] tf2 头文件命名 (源码修改)  Humble 用 .hpp, Foxy 只有 .h
+    - tf2_geometry_msgs/tf2_geometry_msgs.hpp -> tf2_geometry_msgs.h
+    - tf2/utils.hpp -> tf2/utils.h
+    涉及: src/planner/plan_manage/src/go2_kinematic_sim.cpp
+          src/planner/plan_manage/src/open_loop_controller.cpp
+          src/planner/plan_manage/src/closed_loop_controller.cpp
+
+[7] 运行阶段: RViz 空白
+    现象: launch 后一切进程正常, rviz 无内容, scan_planner 打印
+          "[FSM]: state: INIT / no odom / wait for goal."
+    原因: 未给 goal 前 SCAN 不启动规划(属正常), 需在 RViz 用 Interact 拖动
+          绿色 Start/红色 Goal 后右键 Plan route, 或直接:
+          ./scripts/launch_pct_scan_building.sh plan_on_startup:=true
+    注: 本机为软件渲染(OpenGL 3.1/GLSL 1.4), 大数据量点云帧率会很低
+
+结果: 16 个 ROS 包全部编译通过
+      ./scripts/test_pct_building_astar.sh --force -> [astar] PASS
+      (874 poses, 8 层, 高度增益 13.5m, 规划 0.07s)
+
+遗留(未处理, 与本仓库编译无关):
+    - scripts/setup_tomography_env.sh 固定 numpy==1.26.4/scipy==1.11.4,
+      需 Python>=3.9, Foxy 默认 3.8; 生成自己点云 tomogram 前改为
+      numpy==1.24.4 / scipy==1.10.1
+    - src/pct/pct_planner/pct_planner/plan.py 用了 match/case(Python3.10+),
+      未被任何 launch/入口引用, 不影响编译
+========================================================
+
+
+
+
+2026年9月3日 运行命令
+ros2 run scan_planner scan_planner_node --ros-args \
+  --params-file /home/user/third_party/pct_Scanner/PCT-SCAN-ROS2/install/scan_planner/share/scan_planner/config/planner_lightning.yaml
+
+
+栅格地图生成
+cd /home/user/third_party/pct_Scanner/PCT-SCAN-ROS2
+python3 -m venv .venv-tomography
+.venv-tomography/bin/pip install --upgrade pip wheel
+.venv-tomography/bin/pip install "numpy==1.24.4" "scipy==1.10.1" "open3d==0.18.0"
+
+cd /home/user/third_party/pct_Scanner/PCT-SCAN-ROS2
+./scripts/generate_tomogram.sh \
+  --input  /var/opt/robot/data/lightning/data/map_offline/global.pcd \
+  --output /var/opt/robot/data/lightning/data/map_offline/scene.pickle \
+  --backend cpu \
+  --resolution 0.20 \
+  --ground-height -0.20 \
+  --slice-height 0.50 \
+  --force
+
+source /opt/robot/scripts/setup_ros2.sh
+source /home/user/third_party/lightning_lm/install/setup.bash
+source /home/user/third_party/pct_Scanner/PCT-SCAN-ROS2/install/setup.bash
+ros2 launch pct_scan_bridge pct_bridge.launch.py \
+  tomogram_path:=/var/opt/robot/data/lightning/data/map_offline/scene.pickle \
+  rsg_root:=/var/opt/robot/data/lightning \
+  scene_name:=custom \
+  frame_id:=map \
+  coord_mode:=identity \
+  path_topic:=/pct_path \
+  plan_on_startup:=false \
+  enable_interactive_markers:=true
+
+
+
+ros2 launch pct_scan_bridge pct_bridge.launch.py \
+  tomogram_path:=/var/opt/robot/data/lightning/data/pct_map/scene.pickle \
+  rsg_root:=/var/opt/robot/data/lightning \
+  scene_name:=custom \
+  frame_id:=map \
+  coord_mode:=identity \
+  path_topic:=/pct_path \
+  plan_on_startup:=false \
+  enable_interactive_markers:=true
+
+
+

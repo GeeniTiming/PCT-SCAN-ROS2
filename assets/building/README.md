@@ -9,7 +9,7 @@ RViz-only Building demo:
 - `routes/ground_to_upper.csv`: a generated cross-floor A* smoke-test result.
 
 The PCD originates from the official GPL-licensed PCT planner resources.  The
-`_ros2` pickle is normalized so it can be loaded by Ubuntu 20.04's system NumPy
+`_ros2` pickle is normalized so it can be loaded by Ubuntu 22.04's system NumPy
 without importing an external PCT virtual environment.
 
 The upstream project and attribution are documented at

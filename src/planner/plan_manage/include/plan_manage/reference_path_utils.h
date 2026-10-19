@@ -3,13 +3,13 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include <Eigen/Eigen>
 #include <nav_msgs/msg/path.hpp>
-#include <plan_manage/goal_heading_utils.h>
 
 namespace scan_planner
 {
@@ -86,10 +86,9 @@ inline bool prepareReferenceWaypoints(
     std::vector<Eigen::Vector3d> &waypoints,
     std::string *error = nullptr,
     double simplify_tolerance = 0.0,
-    std::optional<double> *terminal_yaw = nullptr)
+    double *terminal_yaw = nullptr)
 {
   waypoints.clear();
-  if (terminal_yaw) terminal_yaw->reset();
   if (path.poses.empty())
   {
     if (error) *error = "reference path is empty";
@@ -140,8 +139,20 @@ inline bool prepareReferenceWaypoints(
   }
 
   waypoints = simplifyReferenceWaypoints(waypoints, simplify_tolerance);
+
   if (terminal_yaw)
-    *terminal_yaw = terminalYawFromQuaternion(path.poses.back().pose.orientation);
+  {
+    // The final pose orientation encodes the desired terminal heading.  An
+    // identity (or absent) orientation carries no heading, so report NaN and
+    // let the FSM fall back to the tangent behaviour.
+    const auto &q = path.poses.back().pose.orientation;
+    const double norm_xy = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z);
+    *terminal_yaw = (norm_xy > 1e-3)
+        ? std::atan2(2.0 * (q.w * q.z + q.x * q.y),
+                     1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        : std::numeric_limits<double>::quiet_NaN();
+  }
+
   return true;
 }
 

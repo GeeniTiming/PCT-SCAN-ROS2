@@ -1,93 +1,214 @@
-# M20Pro + Lightning-LM 专用 SCAN planner 配置（单文件启动，无需 -r 重映射）
+# ============================================================================
+# M20Pro + Lightning-LM 专用 SCAN planner 配置（真机单文件启动，无需 -r 重映射）
 #
-# 话题名现在由参数提供（代码默认值保留原相对名）：
-#   - grid_map.cloud_topic           默认 cloud            -> /LIDAR/POINTS
-#   - grid_map.sensor_pose_topic     默认 sensor_pose      -> /lightning/odom
-#   - grid_map.sliding_map_frame_topic 默认 body_pose      -> /lightning/odom
-#   - fsm.odom_topic                 默认 body_pose        -> /lightning/odom
-#   - fsm.initial_path_topic         默认 initial_path     -> /pct_path
-#   - fsm.bspline_topic              默认 planning/bspline -> /planning/bspline
+# 启动方式（见 运行日志.txt / M20Pro运行手册.md §5）：
+#   ros2 run scan_planner scan_planner_node --ros-args \
+#     --params-file .../install/scan_planner/share/scan_planner/config/planner_lightning.yaml
+#   install 下本文件是软链接，改这里等于改源码：
+#     src/planner/plan_manage/config/planner_lightning.yaml
 #
-# 与 docs/M20PRO_REALTIME_NAVIGATION.md 第 7 节 planning_only.launch.py 的参数一致。
+# 关键约定：
+#   * /lightning/odom 的 header.frame_id = map、child_frame_id = lidar_link，
+#     所以 grid_map.frame_id 必须是 map，否则栅格/轨迹整体错位。
+#   * 本 planner 是“局部规划器”：只把全局参考路径上 fsm.planning_horizon 长的
+#     一段优化成 B 样条发到 /planning/bspline，靠 FSM 反复重规划一段段往前走。
+#
+# 改完必须重启 scan_planner_node 才生效。
+# ============================================================================
 scan_planner_node:
   ros__parameters:
+    # 使用仿真时钟：真机 false；回放 rosbag / 仿真必须改 true
     use_sim_time: false
 
-    # ---- SCAN FSM 话题 ----
+    # ------------------------------------------------------------------
+    # 一、SCAN FSM 话题
+    # ------------------------------------------------------------------
+    # 里程计话题。只用 pose.pose(位置+四元数) 与 twist.twist.linear；
+    # 其 header.frame_id 必须等于 grid_map.frame_id（当前 map）
     fsm.odom_topic: /lightning/odom
+    # 全局参考路径(nav_msgs/Path)，navi_mode=3 时订阅；由 PCT/bridge 发布
     fsm.initial_path_topic: /pct_path
+    # 局部轨迹输出(scan_planner_msgs/Bspline)，closed_loop_controller 订阅
     fsm.bspline_topic: /planning/bspline
+    # 与控制器互传的“冻结”标志(std_msgs/Bool)：控制器原地转向时置 true，
+    # 规划器据此暂停自己的轨迹时钟（scan_replan_fsm.cpp:451-463）
     fsm.frozen_topic: /planning/go2_execution_frozen
+    # 调试数据输出(scan_planner_msgs/DataDisp)，供监控/RViz
     fsm.data_display_topic: /planning/data_display
+    # 机器人自身膨胀体 Marker(visualization_msgs/Marker)，仅 RViz 显示，不参与规划
     fsm.self_inflation_topic: /self_inflation
+    # 手动目标话题(geometry_msgs/PoseStamped)，仅 navi_mode=1 时订阅
     fsm.goal_topic: /goal_pose
 
+    # ------------------------------------------------------------------
+    # 二、SCAN FSM 行为参数
+    # ------------------------------------------------------------------
+    # 导航模式：1=RViz 手动目标；2=预设航点(需 fsm.waypoints)；3=参考路径(/pct_path)。
+    # 真机走 PCT 时用 3
     fsm.navi_mode: 3
-    fsm.thresh_replan: 1.0
+    # 重规划阈值(m)：局部参考点相对本条轨迹起点前进超过该距离即重规划。
+    # 调大 → 重规划少、省算力但贴合参考路径更松；调小 → 更勤、易抖
+    fsm.thresh_replan: 0.3
+    # 到点停规划阈值(m)：轨迹点距目标小于该值就不再重规划。
+    # 主要对 navi_mode=1/2 有意义（mode3 的 end_pt_ 是远端全局目标）
     fsm.thresh_no_replan: 0.1
-    fsm.planning_horizon: 3.5
+    # 【重要】局部规划窗口长度(m)：沿全局参考路径向前取这么长作为一条局部 B 样条。
+    # 这就是“scan planner 只规划一段”的长度。调大可减少段数与窗口边界抖动，
+    # 但单次优化更慢、局部绕障能力下降。建议 3.5~6.0
+    fsm.planning_horizon: 3.0
+    # 紧急时间(s)：碰撞点距当前时间小于该值直接急停，否则先尝试重规划
     fsm.emergency_time: 1.0
+    # 【重要】定位真正丢失的判定时长(s)：odom 超过该时长才算“丢失”并急停。
+    # 短暂掉帧（如 0.5~0.7s）不会发停车轨迹，控制器继续跟随旧轨迹；
+    # 2.5Hz 的 odom 建议 1.5~2.0，避免频繁误触发急停
+    fsm.odom_lost_timeout: 2.0
+    # 失效保护：允许从 EMERGENCY_STOP 自动恢复（速度足够小且无悬停需求时）
     fsm.fail_safe: true
+    # 连续重规划失败上限(次)：超过则急停并等待新目标。调大更“执拗”，调小更保守
     fsm.max_replan_fail_count: 1000
+    # 【终点朝向】总开关：true 时到达终点前边转边走，终点朝向由 /pct_path 末帧
+    # orientation（RViz 2D Goal Pose / Goal 旋转环）决定。false=纯切向，原行为
+    fsm.enable_goal_yaw: true
+    # 转弯参考角速度(rad/s)：铺开距离 S_blend = v*|Δψ|/rate 的参考值
+    fsm.terminal_yaw_rate: 0.7
+    # 最小铺开距离(m)：S_blend 下限，太小的目标朝向也会留出这段距离转向
+    fsm.terminal_blend_min_dist: 0.5
 
-    # ---- GridMap 话题 ----
+    # ------------------------------------------------------------------
+    # 三、GridMap 输入话题
+    # ------------------------------------------------------------------
+    # 点云话题(PointCloud2)，sensor_type=lidar 时使用；真机为 /LIDAR/POINTS
     grid_map.cloud_topic: /LIDAR/POINTS
+    # 传感器位姿(nav_msgs/Odometry)，用于把点云投进地图；真机用 /lightning/odom
     grid_map.sensor_pose_topic: /lightning/odom
+    # 滑动地图中心位姿：决定局部栅格窗口跟着谁移动（同样用 /lightning/odom）
     grid_map.sliding_map_frame_topic: /lightning/odom
+    # 深度图话题(sensor_msgs/Image)，sensor_type=depth 时才用；lidar 模式可忽略
     grid_map.depth_topic: /depth
 
+    # ---- 地图几何 ----
+    # 栅格分辨率(m)：越小越精细但内存/算力越大。0.3m/s 场景 0.05 足够
     grid_map.resolution: 0.05
+    # 局部滑动地图尺寸(m, x/y/z)：以机器人为中心的栅格窗口大小
     grid_map.sliding_map_size_x: 10.0
     grid_map.sliding_map_size_y: 10.0
     grid_map.sliding_map_size_z: 5.0
+    # 局部更新范围(m)：只有距传感器该范围内的点参与写入/raycast，控制计算量
     grid_map.local_update_range_x: 5.0
     grid_map.local_update_range_y: 5.0
     grid_map.local_update_range_z: 2.5
+    # 是否启用滑动地图（false=固定地图，真机不推荐）
     grid_map.map_sliding_en: true
+    # 触发滑动的位移阈值(m)：机器人移动超过该值才整体挪动栅格窗口
     grid_map.map_sliding_thresh: 0.2
-    grid_map.double_cylinder_radius: 0.35   # 例如 M20 半宽（需按实际机身标定）
-    grid_map.double_cylinder_offset: 0.18
-    grid_map.body_height: 0.4
+
+    # ---- 碰撞模型（标定项，直接影响“误判碰撞→重规划风暴”）----
+    # 机器人碰撞半径(m)：M20 半宽。同时用于
+    #   (1) 障碍物膨胀半径（grid_map.cpp:214-232）
+    #   (2) 双圆盘碰撞检测 getInflateOccupancy（grid_map.h:369-379）
+    # 调大更安全，但窄道里更容易被判碰撞并触发重规划；必须按实机标定
+    grid_map.double_cylinder_radius: 0.15
+    # 双圆盘前后偏移(m)：两个碰撞圆相对机身中心的前/后距离
+    grid_map.double_cylinder_offset: 0.15
+    # 机身高度(m)：参考路径每点 z += body_height（reference_path_utils.h:117）。
+    # 需与 ground_height 配合，让参考路径落在可通行高度
+    grid_map.body_height: 0.2
+    # 障碍物向上/向下膨胀(m)：把障碍在 z 方向加厚，避免被从上方或下方钻过
     grid_map.obstacles_inflation_z_up: 0.1
     grid_map.obstacles_inflation_z_down: 0.1
+    # 地图坐标系名。必须与 fsm.odom_topic 的 frame_id 一致（当前 map）
     grid_map.frame_id: map
+    # 滑动地图 TF 子坐标系名（仅用于发布 map->sliding_map 变换做可视化）
     grid_map.sliding_map_frame_id: sliding_map
+    # 地图 z 下界(m)：即 map_origin_ 的 z。地面被误判为障碍时优先查这里
     grid_map.ground_height: 0.0
+    # 传感器类型：lidar / depth。真机用 lidar
     grid_map.sensor_type: lidar
+    # 输入点云是否已在世界(map)系：false=点云在传感器系，需按位姿变换
     grid_map.cloud_is_world: false
+    # 是否应用硬编码外参(lidar_extrinsic_/depth_extrinsic_，grid_map.cpp:74-87)。
+    # /LIDAR/POINTS 已在 lidar_link 系 → false
     grid_map.need_extrinsic: false
 
+    # ---- 深度相机内参（仅 sensor_type=depth 使用，lidar 模式可忽略）----
     grid_map.cx: 321.04638671875
     grid_map.cy: 243.44969177246094
     grid_map.fx: 387.229248046875
     grid_map.fy: 387.229248046875
+    # 深度有效距离上下限(m)：范围外按“无回波”处理
     grid_map.depth_filter_maxdist: 3.0
     grid_map.depth_filter_mindist: 0.3
+    # 深度图边缘裁剪像素数，避免边缘无效值
     grid_map.depth_filter_margin: 1
+    # 深度缩放因子：depth 原始单位换算成米（1000 → 毫米）
     grid_map.k_depth_scaling_factor: 1000.0
+    # 深度图跳采样步长(像素)：调大更省算力、更粗
     grid_map.skip_pixel: 2
 
+    # ---- 占据栅格更新（log-odds 概率模型）----
+    # 命中概率：raycast 打到障碍时的增量，越大越“敢记障碍”
     grid_map.p_hit: 0.85
+    # 未命中概率：射线穿过时的减量，越大越“敢清空”
     grid_map.p_miss: 0.30
+    # 概率下限：防止被无限清空
     grid_map.p_min: 0.12
+    # 概率上限：防止被无限累加成障碍
     grid_map.p_max: 0.98
+    # 【重要】占据判定阈值：概率 > p_occ 才判为占据（grid_map.h getOccupancy）。
+    # 调低更敏感、更早判障碍（可能引发重规划风暴）；调高更迟钝
     grid_map.p_occ: 0.80
+    # 单条射线最大长度(m)：超长视为自由空间，避免远端噪声记成障碍
     grid_map.max_ray_length: 5.0
+    # 可视化高度(m)：只发布传感器 z 之上该高度以内的占据格，仅影响显示
     grid_map.vis_height: 0.3
+    # 是否统计/打印建图耗时（调试用）
     grid_map.show_occ_time: false
 
-    manager.max_vel: 0.3
-    manager.max_acc: 0.3
+    # ------------------------------------------------------------------
+    # 四、规划管理器（manager.*）
+    # ------------------------------------------------------------------
+    # 【重要】最大速度(m/s)：用于全局折线参考的时间参数化与可行性检查。
+    # 应与控制器 max_vx 匹配；调大更容易违反加速度约束
+    manager.max_vel: 0.4
+    # 【重要】最大加速度(m/s^2)：B 样条可行性检查/时间重分配用。调小更平缓、更肉
+    manager.max_acc: 0.4
+    # 最大加加速度(m/s^3)：当前主要作为参数保留
     manager.max_jerk: 4.0
+    # 控制点间距(m)：B 样条离散密度(ctrl_pt_dist)。调小更贴合但更慢
     manager.control_points_distance: 0.2
+    # 可行性容差：允许速度/加速度超出上限的比例，超出则触发时间重分配
     manager.feasibility_tolerance: 0.5
+    # 局部轨迹长度合法性上限(m)：仅用于判断初始路径是否异常过长
+    # (planner_manager.cpp:244)。真正决定窗口长度的是 fsm.planning_horizon
     manager.planning_horizon: 3.5
 
+    # ------------------------------------------------------------------
+    # 五、B 样条优化权重（optimization.*）
+    # ------------------------------------------------------------------
+    # 平滑项权重(lambda1)：越大轨迹越平滑、越保守
     optimization.lambda_smooth: 1.0
+    # 碰撞项权重(lambda2)：越大越远离障碍。安全优先可适当调大
     optimization.lambda_collision: 1.0
+    # 可行性项权重(lambda3)：越大越严格满足速度/加速度上限
     optimization.lambda_feasibility: 0.1
+    # 贴合项权重(lambda4)：越大越贴合初始引导路径/局部目标
     optimization.lambda_fitness: 1.0
+    # 期望安全间距(m)：轨迹与障碍的期望余量(cps_.clearance)
     optimization.dist0: 0.2
+    # 【重要】优化器速度上限(m/s)：应 ≤ manager.max_vel
     optimization.max_vel: 0.3
+    # 【重要】优化器加速度上限(m/s^2)：应 ≤ manager.max_acc
     optimization.max_acc: 0.3
+    # B 样条阶数：3=三次（默认，通常不要改）
     optimization.order: 3
+
+    # ------------------------------------------------------------------
+    # 六、可选但本文件未显式设置的参数（代码有默认值，需要时再取消注释）
+    # ------------------------------------------------------------------
+    # 动态可行性检查的额外余量（默认 1.0）：实际限值 = max_vel + vel_tolerance
+    # optimization.vel_tolerance: 1.0
+    # optimization.acc_tolerance: 1.0
+    # 参考路径抽稀容差(m)：0/缺省=不抽稀；调大可减少航点数、去掉细碎拐点
+    # fsm.reference_path_simplify_tolerance: 0.0
+    # 参考路径最小采样间距(m)（默认 0.5）：PCT 路径点的最小间隔
+    # fsm.reference_path_min_distance: 0.5

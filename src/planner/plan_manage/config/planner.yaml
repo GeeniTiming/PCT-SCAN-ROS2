@@ -2,13 +2,16 @@ scan_planner_node:
   ros__parameters:
     use_sim_time: false
 
-    fsm.navi_mode: 1
+    fsm.navi_mode: 3
     fsm.thresh_replan: 1.0
     fsm.thresh_no_replan: 0.1
     fsm.planning_horizon: 3.5
     fsm.emergency_time: 1.0
     fsm.fail_safe: true
     fsm.max_replan_fail_count: 1000
+    fsm.enable_goal_yaw: false          # 总开关：末端是否转向目标朝向
+    fsm.terminal_yaw_rate: 0.7          # 转弯参考角速度 rad/s
+    fsm.terminal_blend_min_dist: 0.5    # 最小铺开距离 m
 
     grid_map.resolution: 0.05
     grid_map.sliding_map_size_x: 10.0
@@ -19,7 +22,7 @@ scan_planner_node:
     grid_map.local_update_range_z: 2.5
     grid_map.map_sliding_en: true
     grid_map.map_sliding_thresh: 0.2
-    grid_map.double_cylinder_radius: 0.25
+    grid_map.double_cylinder_radius: 0.35   # 例如 M20 半宽
     grid_map.double_cylinder_offset: 0.18
     grid_map.body_height: 0.4
     grid_map.obstacles_inflation_z_up: 0.1
@@ -28,7 +31,7 @@ scan_planner_node:
     grid_map.sliding_map_frame_id: sliding_map
     grid_map.ground_height: 0.0
     grid_map.sensor_type: lidar
-    grid_map.cloud_is_world: true
+    grid_map.cloud_is_world: false  
     grid_map.need_extrinsic: false
 
     grid_map.cx: 321.04638671875

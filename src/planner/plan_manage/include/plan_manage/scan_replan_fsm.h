@@ -4,7 +4,6 @@
 #include <Eigen/Eigen>
 #include <chrono>
 #include <plan_manage/arrival_policy.h>
-#include <plan_manage/goal_heading_utils.h>
 #include <algorithm>
 #include <geometry_msgs/msg/pose_stamped.hpp>
 #include <iostream>
@@ -64,17 +63,20 @@ namespace scan_planner
     int waypoint_num_;
     double planning_horizon_;
     double emergency_time_;
-    double odom_timeout_;
+    double odom_lost_timeout_{2.0};   // 定位真正丢失的判定时长(s)：超过才急停
     double rviz_goal_height_;
     double self_inflation_z_up_, self_inflation_z_down_;
     double self_double_cylinder_radius_, self_double_cylinder_offset_;
     double body_height_;
     double reference_path_min_distance_, reference_path_simplify_tolerance_;
     std::string self_inflation_frame_id_;
-    // Final heading is checked only after entering the physical position arrival zone.
-    std::optional<double> terminal_goal_yaw_;
-    double goal_yaw_tolerance_{0.1};
-    bool terminal_alignment_active_{false};
+
+    /* goal-yaw (terminal heading) parameters */
+    double goal_yaw_{0.0};
+    bool goal_yaw_valid_{false};
+    bool enable_goal_yaw_{false};
+    double terminal_yaw_rate_{0.7};
+    double terminal_blend_min_dist_{0.5};
 
     /* planning data */
     bool trigger_, have_target_, have_odom_, have_new_target_;
@@ -112,7 +114,7 @@ namespace scan_planner
 
     /* helper functions */
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
-    bool callEmergencyStop(Eigen::Vector3d stop_pos, bool terminal_align = false);                          // front-end and back-end method
+    bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
 
@@ -132,6 +134,8 @@ namespace scan_planner
     double getOdomYaw() const;
     double estimateYawFromSegment(const Eigen::Vector3d &from, const Eigen::Vector3d &to) const;
     void updateLocalTrajTimeFreeze();
+    void appendYawProfile(scan_planner_msgs::msg::Bspline &bspline,
+                          const LocalTrajData *info);
 
     /* ROS functions */
     void execFSMCallback();

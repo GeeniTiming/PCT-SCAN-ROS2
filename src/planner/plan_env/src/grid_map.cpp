@@ -28,7 +28,7 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.local_update_range_x", mp_.local_update_range_(0), x_size / 2.0);
   load_parameter(node_, "grid_map.local_update_range_y", mp_.local_update_range_(1), y_size / 2.0);
   load_parameter(node_, "grid_map.local_update_range_z", mp_.local_update_range_(2), z_size / 2.0);
-
+  
   load_parameter(node_, "grid_map.obstacles_inflation_z_up", mp_.obstacles_inflation_z_up, -1.0);
   load_parameter(node_, "grid_map.obstacles_inflation_z_down", mp_.obstacles_inflation_z_down, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_radius", mp_.double_cylinder_radius_, -1.0);
@@ -82,7 +82,7 @@ void GridMap::initMap(rclcpp::Node *node)
      -1.0,  0.000000, 0.000000,  0.00000,
       0.0, -0.707107, 0.707107,  0.07510,
       0.0,  0.000000, 0.000000,  1.00000;
-
+      
   if (mp_.sensor_type_ != "lidar" && mp_.sensor_type_ != "depth")
   {
     RCLCPP_ERROR(node_->get_logger(), "[GridMap] invalid grid_map.sensor_type: %s; falling back to lidar",

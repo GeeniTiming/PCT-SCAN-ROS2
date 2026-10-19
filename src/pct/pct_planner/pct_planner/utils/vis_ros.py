@@ -1,8 +1,10 @@
+import math
+
 from nav_msgs.msg import Path
 from geometry_msgs.msg import PoseStamped
 from rclpy.clock import Clock
 
-def traj2ros(traj_3d, frame_id="map", stamp=None):
+def traj2ros(traj_3d, frame_id="map", stamp=None, goal_yaw=None):
     path = Path()
     path.header.stamp = stamp if stamp is not None else Clock().now().to_msg()
     path.header.frame_id = frame_id
@@ -18,4 +20,8 @@ def traj2ros(traj_3d, frame_id="map", stamp=None):
         pose.pose.orientation.z = 0.0
         pose.pose.orientation.w = 1.0
         path.poses.append(pose)
+    if goal_yaw is not None and path.poses:
+        orientation = path.poses[-1].pose.orientation
+        orientation.z = math.sin(goal_yaw / 2.0)
+        orientation.w = math.cos(goal_yaw / 2.0)
     return path

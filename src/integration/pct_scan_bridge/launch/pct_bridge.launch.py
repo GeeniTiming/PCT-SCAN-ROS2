@@ -14,15 +14,6 @@ def generate_launch_description():
         DeclareLaunchArgument("frame_id", default_value="world"),
         DeclareLaunchArgument("coord_mode", default_value="identity"),
         DeclareLaunchArgument("path_topic", default_value="/pct_path"),
-        DeclareLaunchArgument("start_topic", default_value="/pct_start"),
-        DeclareLaunchArgument("goal_topic", default_value="/goal_pose"),
-        DeclareLaunchArgument("clicked_point_topic", default_value="/clicked_point"),
-        DeclareLaunchArgument("odom_auto_start", default_value="false"),
-        DeclareLaunchArgument("odom_start_min_delta", default_value="0.05"),
-        DeclareLaunchArgument("auto_start_from_odom", default_value="false"),
-        DeclareLaunchArgument("odom_topic", default_value="/lightning/odom"),
-        DeclareLaunchArgument("odom_timeout_sec", default_value="0.5"),
-        DeclareLaunchArgument("odom_start_z_offset", default_value="0.0"),
         DeclareLaunchArgument("publish_tomogram", default_value="true"),
         DeclareLaunchArgument("tomogram_topic", default_value="/pct_tomogram"),
         DeclareLaunchArgument("plan_on_startup", default_value="false"),
@@ -37,8 +28,6 @@ def generate_launch_description():
         DeclareLaunchArgument("preferred_clearance", default_value="0.5"),
         DeclareLaunchArgument("clearance_cost", default_value="20.0"),
         DeclareLaunchArgument("astar_step_cost_weight", default_value="1.0"),
-        DeclareLaunchArgument("gateway_cost_delta", default_value="8.0"),
-        DeclareLaunchArgument("gateway_height_tolerance", default_value="0.1"),
         DeclareLaunchArgument("tomogram_visual_min_cost", default_value="0.0"),
         DeclareLaunchArgument("tomogram_visual_max_cost", default_value="50.0"),
         DeclareLaunchArgument(
@@ -50,6 +39,11 @@ def generate_launch_description():
         DeclareLaunchArgument("scene_goal_x", default_value="0.0"),
         DeclareLaunchArgument("scene_goal_y", default_value="0.0"),
         DeclareLaunchArgument("scene_goal_z", default_value="0.0"),
+        DeclareLaunchArgument("scene_goal_yaw", default_value=".nan"),
+        DeclareLaunchArgument("odom_topic", default_value="/lightning/odom"),
+        DeclareLaunchArgument("odom_auto_start", default_value="false"),
+        DeclareLaunchArgument("odom_start_z_offset", default_value="0.0"),
+        DeclareLaunchArgument("odom_start_min_delta", default_value="0.05"),
     ]
 
     node = Node(
@@ -66,19 +60,6 @@ def generate_launch_description():
                 "coord_mode": LaunchConfiguration("coord_mode"),
                 "optimize_path": False,
                 "path_topic": LaunchConfiguration("path_topic"),
-                "start_topic": LaunchConfiguration("start_topic"),
-                "goal_topic": LaunchConfiguration("goal_topic"),
-                "clicked_point_topic": LaunchConfiguration("clicked_point_topic"),
-                "odom_auto_start": LaunchConfiguration("odom_auto_start"),
-                "odom_start_min_delta": LaunchConfiguration("odom_start_min_delta"),
-                "auto_start_from_odom": LaunchConfiguration(
-                    "auto_start_from_odom"
-                ),
-                "odom_topic": LaunchConfiguration("odom_topic"),
-                "odom_timeout_sec": LaunchConfiguration("odom_timeout_sec"),
-                "odom_start_z_offset": LaunchConfiguration(
-                    "odom_start_z_offset"
-                ),
                 "publish_tomogram": LaunchConfiguration("publish_tomogram"),
                 "tomogram_topic": LaunchConfiguration("tomogram_topic"),
                 "plan_on_startup": LaunchConfiguration("plan_on_startup"),
@@ -105,10 +86,6 @@ def generate_launch_description():
                 "astar_step_cost_weight": LaunchConfiguration(
                     "astar_step_cost_weight"
                 ),
-                "gateway_cost_delta": LaunchConfiguration("gateway_cost_delta"),
-                "gateway_height_tolerance": LaunchConfiguration(
-                    "gateway_height_tolerance"
-                ),
                 "tomogram_visual_min_cost": LaunchConfiguration(
                     "tomogram_visual_min_cost"
                 ),
@@ -124,6 +101,11 @@ def generate_launch_description():
                 "scene_goal_x": LaunchConfiguration("scene_goal_x"),
                 "scene_goal_y": LaunchConfiguration("scene_goal_y"),
                 "scene_goal_z": LaunchConfiguration("scene_goal_z"),
+                "scene_goal_yaw": LaunchConfiguration("scene_goal_yaw"),
+                "odom_topic": LaunchConfiguration("odom_topic"),
+                "odom_auto_start": LaunchConfiguration("odom_auto_start"),
+                "odom_start_z_offset": LaunchConfiguration("odom_start_z_offset"),
+                "odom_start_min_delta": LaunchConfiguration("odom_start_min_delta"),
             }
         ],
     )

@@ -27,18 +27,6 @@ def generate_launch_description():
         description='Name of the scene to load (e.g., plaza, building)'
     )
 
-    pcd_path_arg = DeclareLaunchArgument(
-        'pcd_path',
-        default_value='',
-        description='Optional absolute PCD path, for example Lightning global.pcd'
-    )
-
-    benchmark_repeats_arg = DeclareLaunchArgument(
-        'benchmark_repeats',
-        default_value='1',
-        description='CPU benchmark repeats after the warm-up pass'
-    )
-
     # Node configuration
     tomography_node = Node(
         package='tomography',
@@ -47,16 +35,12 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'rsg_root': LaunchConfiguration('rsg_root'),
-            'scene_name': LaunchConfiguration('scene_name'),
-            'pcd_path': LaunchConfiguration('pcd_path'),
-            'benchmark_repeats': LaunchConfiguration('benchmark_repeats')
+            'scene_name': LaunchConfiguration('scene_name')
         }]
     )
 
     return LaunchDescription([
         rsg_root_arg,
         scene_name_arg,
-        pcd_path_arg,
-        benchmark_repeats_arg,
         tomography_node
     ])

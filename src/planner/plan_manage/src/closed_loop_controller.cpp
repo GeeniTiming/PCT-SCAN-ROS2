@@ -2,7 +2,6 @@
 #include <cmath>
 #include <cstdint>
 #include <memory>
-#include <stdexcept>
 #include <vector>
 
 #include <Eigen/Eigen>
@@ -15,7 +14,6 @@
 #include <tf2/utils.h>
 
 #include "bspline_opt/uniform_bspline.h"
-#include "plan_manage/goal_heading_utils.h"
 
 namespace scan_planner
 {
@@ -28,16 +26,13 @@ public:
     heading_error_threshold_ = declare_parameter<double>("heading_error_threshold", 0.8);
     kp_pos_ = declare_parameter<double>("kp_pos", 0.8);
     kp_yaw_ = declare_parameter<double>("kp_yaw", 1.5);
+    kd_pos_ = declare_parameter<double>("kd_pos", 0.0);
+    kd_yaw_ = declare_parameter<double>("kd_yaw", 0.0);
     max_vx_ = declare_parameter<double>("max_vx", 0.75);
     max_vy_ = declare_parameter<double>("max_vy", 0.35);
     max_vyaw_ = std::min(declare_parameter<double>("max_vyaw", 1.0), kMaxVYawLimit);
     finish_dist_ = declare_parameter<double>("finish_dist", 0.15);
-    finish_yaw_tolerance_ = declare_parameter<double>("finish_yaw_tolerance", 0.1);
-    terminal_min_yaw_rate_ = declare_parameter<double>("terminal_min_yaw_rate", 0.0);
-    if (!std::isfinite(finish_yaw_tolerance_) || finish_yaw_tolerance_ <= 0.0 ||
-        finish_yaw_tolerance_ >= M_PI || !std::isfinite(terminal_min_yaw_rate_) ||
-        terminal_min_yaw_rate_ < 0.0 || terminal_min_yaw_rate_ > max_vyaw_)
-      throw std::runtime_error("Invalid terminal yaw tolerance or minimum rate");
+    finish_yaw_tolerance_ = declare_parameter<double>("finish_yaw_tolerance", 0.08);
     const std::string bspline_topic = declare_parameter<std::string>("bspline_topic", "planning/bspline");
     const std::string odom_topic = declare_parameter<std::string>("odom_topic", "body_pose");
     const std::string cmd_vel_topic = declare_parameter<std::string>("cmd_vel_topic", "cmd_vel");
@@ -53,7 +48,6 @@ public:
     execution_frozen_pub_ = create_publisher<std_msgs::msg::Bool>(frozen_topic, 10);
     cmd_timer_ = create_wall_timer(std::chrono::milliseconds(10),
                                    std::bind(&ClosedLoopController::cmdCallback, this));
-    last_update_time_ = now();
     RCLCPP_INFO(get_logger(), "Closed-loop controller ready");
   }
 
@@ -73,8 +67,23 @@ private:
     return (norm <= max_norm || norm < 1e-6) ? value : value / norm * max_norm;
   }
 
+  // Sample the planner-supplied yaw profile (equal-interval samples plus linear
+  // interpolation) at trajectory time t.  Only used when has_yaw_profile_.
+  double sampleYaw(double t) const
+  {
+    const double tc = std::clamp(t, 0.0, traj_duration_);
+    const double u = tc / std::max(yaw_dt_, 1e-6);
+    const int n = static_cast<int>(yaw_pts_.size());
+    if (n == 0) return odom_yaw_;
+    const int i0 = std::min<int>(static_cast<int>(u), n - 1);
+    const int i1 = std::min<int>(i0 + 1, n - 1);
+    const double frac = std::min(u - i0, 1.0);
+    return yaw_pts_[i0] + normalizeAngle(yaw_pts_[i1] - yaw_pts_[i0]) * frac;
+  }
+
   double estimateDesiredYaw(double t_cur, const Eigen::Vector3d &pos_des) const
   {
+    if (has_yaw_profile_) return sampleYaw(t_cur);
     const double t_look = std::min(traj_duration_, t_cur + time_forward_);
     Eigen::Vector3d direction = traj_[0].evaluateDeBoorT(t_look) - pos_des;
     if (direction.head<2>().squaredNorm() < 1e-4)
@@ -114,34 +123,36 @@ private:
     traj_ = {position, position.getDerivative()};
     traj_.push_back(traj_[1].getDerivative());
     traj_duration_ = traj_[0].getTimeSum();
-    // Read metadata from this exact trajectory; never retain a previous goal's yaw.
-    // Moving trajectories retain path-following yaw; only an explicit
-    // stationary arrival hold activates terminal alignment.
-    terminal_goal_yaw_ = decodeTerminalGoalYaw(*msg);
-    const bool previous_terminal_alignment = terminal_alignment_;
-    terminal_alignment_ = isTerminalAlignmentTrajectory(*msg);
-    if (terminal_alignment_)
-      RCLCPP_INFO(get_logger(), "TERMINAL_ROTATION_REQUEST: trajectory=%lld target_yaw=%.2fdeg",
-                  static_cast<long long>(msg->traj_id), *terminal_goal_yaw_ * 180.0 / M_PI);
-    else if (previous_terminal_alignment)
-      RCLCPP_INFO(get_logger(), "TERMINAL_ROTATION_EXIT: trajectory=%lld heading_present=%d",
-                  static_cast<long long>(msg->traj_id), int(terminal_goal_yaw_.has_value()));
+    yaw_pts_ = msg->yaw_pts;
+    yaw_dt_ = msg->yaw_dt;
+    has_yaw_profile_ = !yaw_pts_.empty() && yaw_dt_ > 0.0;
     traj_id_ = msg->traj_id;
-    exec_time_ = 0.0;
-    last_update_time_ = now();
+    // 直接采用消息里的 start_time 作为轨迹时间原点：规划器在 freeze 时会前推
+    // start_time，因此这里天然与规划器时钟一致，重规划也不会把参考点强制拉回 0。
+    if (msg->start_time.sec == 0 && msg->start_time.nanosec == 0)
+      traj_start_time_ = now();
+    else
+      traj_start_time_ = rclcpp::Time(msg->start_time, get_clock()->get_clock_type());
     receive_traj_ = true;
     RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
                 static_cast<long long>(traj_id_), traj_duration_);
-    if (terminal_goal_yaw_)
-      RCLCPP_INFO(get_logger(),
-                  "Received terminal heading: map yaw=%.1f deg, trajectory %lld",
-                  *terminal_goal_yaw_ * 180.0 / M_PI, static_cast<long long>(traj_id_));
   }
 
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
   {
     odom_pos_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
-    odom_yaw_ = tf2::getYaw(msg->pose.pose.orientation);
+    // /lightning/odom 的 twist 是 map 系速度（loc_system.cc: velocity = pose.so3() * vel_b_）
+    odom_vel_ << msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z;
+    const double yaw = tf2::getYaw(msg->pose.pose.orientation);
+    const double stamp_sec = now().seconds();
+    if (have_odom_)
+    {
+      const double dt = stamp_sec - last_odom_stamp_sec_;
+      if (dt > 1e-3)
+        odom_yaw_rate_ = normalizeAngle(yaw - odom_yaw_) / dt;
+    }
+    odom_yaw_ = yaw;
+    last_odom_stamp_sec_ = stamp_sec;
     have_odom_ = true;
   }
 
@@ -153,55 +164,54 @@ private:
       publishStop();
       return;
     }
-    const auto current_time = now();
-    if (terminal_alignment_ && terminal_goal_yaw_)
-    {
-      // This trajectory is a stationary arrival hold. Do not translate or
-      // advance its clock while turning; SCAN monitors the real global pose.
-      const double error = *terminal_goal_yaw_ - odom_yaw_;
-      const double rate = terminalAlignmentYawRate(error, finish_yaw_tolerance_,
-                                                   kp_yaw_, terminal_min_yaw_rate_, max_vyaw_);
-      RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 1000,
-          "TERMINAL_ROTATION_STATUS: trajectory=%lld target_yaw=%.2fdeg actual_yaw=%.2fdeg "
-          "yaw_error=%.2fdeg yaw_command=%.3frad/s",
-          static_cast<long long>(traj_id_), *terminal_goal_yaw_ * 180.0 / M_PI,
-          odom_yaw_ * 180.0 / M_PI, std::remainder(error, 2.0 * M_PI) * 180.0 / M_PI, rate);
-      publishExecutionFrozen(rate != 0.0);
-      publishStop(rate);
-      last_update_time_ = current_time;
-      return;
-    }
-    double dt = (current_time - last_update_time_).seconds();
-    if (dt < 0.0 || dt > 0.2) dt = 0.0;
-    const double t_eval = std::min(exec_time_, traj_duration_);
+    // 参考时间由 traj_start_time_ 推算，不再每条消息清零/按墙上时钟累加。
+    const double raw_t = (now() - traj_start_time_).seconds();
+    const double t_eval = std::clamp(raw_t, 0.0, traj_duration_);
     Eigen::Vector3d pos_des = traj_[0].evaluateDeBoorT(t_eval);
     const double yaw_error = normalizeAngle(estimateDesiredYaw(t_eval, pos_des) - odom_yaw_);
-    const double yaw_command = std::clamp(kp_yaw_ * yaw_error, -max_vyaw_, max_vyaw_);
-    if (std::abs(yaw_error) > heading_error_threshold_)
+    const double yaw_command =
+        std::clamp(kp_yaw_ * yaw_error - kd_yaw_ * odom_yaw_rate_, -max_vyaw_, max_vyaw_);
+    // A yaw profile deliberately turns the robot while it moves, so the
+    // heading-error freeze must not stop it; it only applies to tangent control.
+    if (!has_yaw_profile_ && std::abs(yaw_error) > heading_error_threshold_)
     {
       publishExecutionFrozen(true);
       publishStop(yaw_command);
-      last_update_time_ = current_time;
       return;
     }
 
     publishExecutionFrozen(false);
-    exec_time_ = std::min(traj_duration_, exec_time_ + dt);
-    last_update_time_ = current_time;
-    pos_des = traj_[0].evaluateDeBoorT(exec_time_);
-    const Eigen::Vector3d vel_des = traj_[1].evaluateDeBoorT(exec_time_);
+    const Eigen::Vector3d vel_des = traj_[1].evaluateDeBoorT(t_eval);
     const Eigen::Vector2d pos_error(pos_des.x() - odom_pos_.x(), pos_des.y() - odom_pos_.y());
+    const Eigen::Vector2d vel_des_xy(vel_des.x(), vel_des.y());
+    const Eigen::Vector2d odom_vel_xy(odom_vel_.x(), odom_vel_.y());
+    // PD 跟踪：vel_des 前馈 + 位置比例 + 速度阻尼。纯 P 会过冲并触发反向命令
+    // （即“走一截回退一小截”），阻尼项把过冲压掉。
     const Eigen::Vector2d vel_world = clampNorm(
-        Eigen::Vector2d(vel_des.x(), vel_des.y()) + kp_pos_ * pos_error,
+        vel_des_xy + kp_pos_ * pos_error - kd_pos_ * (odom_vel_xy - vel_des_xy),
         std::max(max_vx_, max_vy_));
     const double c = std::cos(odom_yaw_);
     const double s = std::sin(odom_yaw_);
     geometry_msgs::msg::Twist command;
-    command.linear.x = std::clamp(c * vel_world.x() + s * vel_world.y(), -max_vx_, max_vx_);
+    // 该场景沿 PCT 参考路径单向前进，不需要倒车。轨迹末端 vel_des≈0 时，
+    // 位置保持项 + 2.5Hz 滞后 odom 会过冲成反向指令（即“走一步回退”），
+    // 因此把纵向速度钳成非负，末端只会停住/微前蠕，不再倒退。
+    command.linear.x = std::clamp(c * vel_world.x() + s * vel_world.y(), 0.0, max_vx_);
     command.linear.y = std::clamp(-s * vel_world.x() + c * vel_world.y(), -max_vy_, max_vy_);
     command.angular.z = yaw_command;
-    if (exec_time_ >= traj_duration_ && pos_error.norm() < finish_dist_)
+    if (raw_t >= traj_duration_ && pos_error.norm() < finish_dist_)
+    {
+      if (has_yaw_profile_ && std::abs(yaw_error) > finish_yaw_tolerance_)
+      {
+        // Position is reached but the terminal heading is not: rotate in place
+        // instead of zeroing everything and stopping mis-aimed.
+        geometry_msgs::msg::Twist rotate_cmd;
+        rotate_cmd.angular.z = yaw_command;
+        cmd_vel_pub_->publish(rotate_cmd);
+        return;
+      }
       command = geometry_msgs::msg::Twist();
+    }
     cmd_vel_pub_->publish(command);
   }
 
@@ -215,15 +225,18 @@ private:
   std::vector<UniformBspline> traj_;
   double traj_duration_{0.0};
   std::int64_t traj_id_{0};
+  rclcpp::Time traj_start_time_{0, 0, RCL_ROS_TIME};
   Eigen::Vector3d odom_pos_{Eigen::Vector3d::Zero()};
+  Eigen::Vector3d odom_vel_{Eigen::Vector3d::Zero()};
   double odom_yaw_{0.0};
-  std::optional<double> terminal_goal_yaw_;
-  bool terminal_alignment_{false};
-  double finish_yaw_tolerance_, terminal_min_yaw_rate_;
-  double exec_time_{0.0};
-  rclcpp::Time last_update_time_{0, 0, RCL_ROS_TIME};
+  double odom_yaw_rate_{0.0};
+  double last_odom_stamp_sec_{-1.0};
   double time_forward_, heading_error_threshold_, kp_pos_, kp_yaw_;
-  double max_vx_, max_vy_, max_vyaw_, finish_dist_;
+  double kd_pos_{0.0}, kd_yaw_{0.0};
+  double max_vx_, max_vy_, max_vyaw_, finish_dist_, finish_yaw_tolerance_;
+  std::vector<double> yaw_pts_;
+  double yaw_dt_{0.0};
+  bool has_yaw_profile_{false};
 };
 }  // namespace scan_planner
 

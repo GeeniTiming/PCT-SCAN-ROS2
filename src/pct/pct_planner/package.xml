@@ -3,7 +3,7 @@
 <package format="3">
   <name>pct_planner</name>
   <version>0.1.0</version>
-  <description>PCT global planner for ROS 2 Foxy on the M20Pro.</description>
+  <description>PCT global planner ported to ROS 2 Humble for PCT-SCAN-ROS2.</description>
   <maintainer email="1523924956@qq.com">alex</maintainer>
   <license>GPL-2.0-or-later</license>
 
@@ -13,6 +13,7 @@
   <test_depend>python3-pytest</test_depend>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <depend>pybind11_vendor</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>nav_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>

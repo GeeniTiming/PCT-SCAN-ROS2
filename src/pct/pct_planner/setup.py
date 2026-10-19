@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='alex',
     maintainer_email='1523924956@qq.com',
-    description='PCT global planner for ROS 2 Foxy and Humble',
+    description='PCT global planner ported to ROS 2 Humble for PCT-SCAN-ROS2',
     license='GPL-2.0-or-later',
     extras_require={
         'test': [

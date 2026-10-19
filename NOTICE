@@ -15,9 +15,8 @@ Original project:
   https://arxiv.org/abs/2606.19555
 
 The upstream project is licensed under the Apache License, Version 2.0.
-This derivative preserves that license and adds ROS 2 integration. The current
-deployment baseline is ROS 2 Foxy on Ubuntu 20.04/aarch64, using ament_cmake,
-colcon, rclcpp, RViz2, tf2_ros and ROS 2 launch integration.
+This derivative preserves that license and adds ROS 2 Humble, Ubuntu 22.04,
+ament_cmake, colcon, rclcpp, RViz2, tf2_ros and ROS 2 launch integration.
 
 PCT planner
   https://github.com/byangw/PCT_planner

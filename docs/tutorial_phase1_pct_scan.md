@@ -124,7 +124,7 @@ Received trajectory 1, duration ...
 另开终端可检查接口：
 
 ```bash
-source /opt/ros/foxy/setup.bash
+source /opt/ros/humble/setup.bash
 source install/setup.bash
 
 ros2 topic echo /pct_path --once

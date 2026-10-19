@@ -55,8 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         choices=("auto", "cuda", "cpu"),
-        default="cpu",
-        help="tomography backend; M20Pro deployments use the default CPU backend",
+        default="auto",
+        help="tomography backend; auto uses CUDA when available and otherwise CPU",
     )
     parser.add_argument(
         "--force", action="store_true", help="replace an existing output pickle"
@@ -116,21 +116,22 @@ def load_pct_runtime():
     try:
         import cupy as cp
         import numpy as np
+        import open3d as o3d
         from tomography.tomogram import Tomogram
     except ImportError as error:
         raise RuntimeError(f"missing PCT Python dependency: {error}") from error
 
-    return cp, np, Tomogram
+    return cp, np, o3d, Tomogram
 
 
 def load_cpu_runtime():
     try:
         import numpy as np
+        import open3d as o3d
         from scipy import ndimage
-        from tomography.pcd_io import read_point_cloud_xyz
     except ImportError as error:
         raise RuntimeError(f"missing CPU tomography dependency: {error}") from error
-    return np, read_point_cloud_xyz, ndimage
+    return np, o3d, ndimage
 
 
 def _round_like_c(values, np):
@@ -324,7 +325,7 @@ def main() -> int:
 
     try:
         config = make_config(args)
-        np, read_point_cloud_xyz, ndimage = load_cpu_runtime()
+        np, o3d, ndimage = load_cpu_runtime()
     except (ValueError, RuntimeError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 3
@@ -334,7 +335,7 @@ def main() -> int:
     Tomogram = None
     if backend in ("auto", "cuda"):
         try:
-            cp, _, Tomogram = load_pct_runtime()
+            cp, _, _, Tomogram = load_pct_runtime()
             cp.cuda.runtime.memGetInfo()
             backend = "cuda"
         except Exception as error:  # CuPy raises backend-specific runtime errors.
@@ -350,9 +351,10 @@ def main() -> int:
     print(f"[tomogram] slice height:{config.map.slice_dh:>7.3f} m")
     print(f"[tomogram] backend:      {backend}")
 
-    points = read_point_cloud_xyz(str(source))
+    cloud = o3d.io.read_point_cloud(str(source), print_progress=True)
+    points = np.asarray(cloud.points).astype(np.float32)
     if points.size == 0:
-        print("error: the PCD reader loaded an empty point cloud", file=sys.stderr)
+        print("error: Open3D loaded an empty point cloud", file=sys.stderr)
         return 4
     points = points[~np.isnan(points).any(axis=1)]
 

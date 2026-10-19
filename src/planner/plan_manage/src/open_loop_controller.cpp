@@ -70,9 +70,27 @@ private:
     start_time_ = rclcpp::Time(msg->start_time);
     traj_id_ = msg->traj_id;
     traj_duration_ = traj_[0].getTimeSum();
+    yaw_pts_ = msg->yaw_pts;
+    yaw_dt_ = msg->yaw_dt;
+    has_yaw_profile_ = !yaw_pts_.empty() && yaw_dt_ > 0.0;
     receive_traj_ = true;
     RCLCPP_INFO(get_logger(), "Received trajectory %lld, duration %.3fs",
                 static_cast<long long>(traj_id_), traj_duration_);
+  }
+
+  // Sample the planner-supplied yaw profile (equal-interval samples plus linear
+  // interpolation) at trajectory time t.  Only used when has_yaw_profile_.
+  double sampleYaw(double t) const
+  {
+    const double tc = std::clamp(t, 0.0, traj_duration_);
+    const double u = tc / std::max(yaw_dt_, 1e-6);
+    const int n = static_cast<int>(yaw_pts_.size());
+    if (n == 0) return last_yaw_;
+    const int i0 = std::min<int>(static_cast<int>(u), n - 1);
+    const int i1 = std::min<int>(i0 + 1, n - 1);
+    const double frac = std::min(u - i0, 1.0);
+    const double diff = std::remainder(yaw_pts_[i1] - yaw_pts_[i0], 2.0 * M_PI);
+    return yaw_pts_[i0] + diff * frac;
   }
 
   void publishState(const rclcpp::Time &stamp, const Eigen::Vector3d &pos,
@@ -120,9 +138,19 @@ private:
       acc = traj_[2].evaluateDeBoorT(t);
     }
     const double speed = std::hypot(vel.x(), vel.y());
-    if (speed > yaw_min_speed_) last_yaw_ = std::atan2(vel.y(), vel.x());
-    const double yaw_rate = speed > yaw_min_speed_
-        ? (vel.x() * acc.y() - vel.y() * acc.x()) / std::max(speed * speed, 1e-6) : 0.0;
+    double yaw_rate = 0.0;
+    if (has_yaw_profile_)
+    {
+      last_yaw_ = sampleYaw(elapsed);
+      const double yaw_left = sampleYaw(std::max(0.0, elapsed - 0.01));
+      const double yaw_right = sampleYaw(std::min(traj_duration_, elapsed + 0.01));
+      yaw_rate = std::remainder(yaw_right - yaw_left, 2.0 * M_PI) / 0.02;
+    }
+    else if (speed > yaw_min_speed_)
+    {
+      last_yaw_ = std::atan2(vel.y(), vel.x());
+      yaw_rate = (vel.x() * acc.y() - vel.y() * acc.x()) / std::max(speed * speed, 1e-6);
+    }
     current_pos_ = pos;
     current_vel_ = vel;
     publishState(now, pos, vel, last_yaw_, yaw_rate);
@@ -141,6 +169,9 @@ private:
   std::string child_frame_id_;
   double last_yaw_{0.0};
   double yaw_min_speed_{0.05};
+  std::vector<double> yaw_pts_;
+  double yaw_dt_{0.0};
+  bool has_yaw_profile_{false};
   Eigen::Vector3d current_pos_{Eigen::Vector3d::Zero()};
   Eigen::Vector3d current_vel_{Eigen::Vector3d::Zero()};
 };

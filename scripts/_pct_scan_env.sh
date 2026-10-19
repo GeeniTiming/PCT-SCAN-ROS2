@@ -8,37 +8,28 @@ fi
 
 PCT_SCAN_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 PCT_SCAN_PROJECT_ROOT="$(cd "$PCT_SCAN_SCRIPT_DIR/.." && pwd -P)"
-PCT_SCAN_WORKSPACE_ROOT="${NAV_WS_ROOT:-$(cd "$PCT_SCAN_PROJECT_ROOT/../.." && pwd -P)}"
-PCT_ROS_SETUP="/opt/ros/foxy/setup.bash"
 
-if [[ ! -f "$PCT_ROS_SETUP" ]]; then
-  echo "[pct-scan] ROS 2 Foxy was not found at /opt/ros/foxy." >&2
+if [[ ! -f /opt/ros/foxy/setup.bash ]]; then
+  echo "[pct-scan] ROS 2 Humble was not found at /opt/ros/foxy." >&2
   return 2
 fi
-if [[ ! -f "$PCT_SCAN_WORKSPACE_ROOT/install/setup.bash" ]]; then
-  echo "[pct-scan] Workspace is not built. Run ../../scripts/build_nav_ws.sh." >&2
+if [[ ! -f "$PCT_SCAN_PROJECT_ROOT/install/setup.bash" ]]; then
+  echo "[pct-scan] Workspace is not built. Run ./scripts/build_workspace.sh." >&2
   return 2
 fi
 
 # Generated ROS setup files legitimately inspect optional unset variables.
 set +u
-source "$PCT_ROS_SETUP"
-if [[ "${ROS_DISTRO:-}" != "foxy" ]]; then
-  echo "[pct-scan] Expected ROS 2 Foxy, found ROS_DISTRO=${ROS_DISTRO:-unset}." >&2
-  return 2
-fi
-if ! "$PCT_SCAN_SCRIPT_DIR/verify_m20pro_baseline.sh" --runtime; then
-  return 2
-fi
+source /opt/ros/foxy/setup.bash
 
-PCT_DEPS_ROOT="${PCT_DEPS_ROOT:-$PCT_SCAN_WORKSPACE_ROOT/.deps/install}"
+PCT_DEPS_ROOT="${PCT_DEPS_ROOT:-$PCT_SCAN_PROJECT_ROOT/.deps/install}"
 if [[ ! -f "$PCT_DEPS_ROOT/gtsam-4.2/lib/libgtsam.so.4" ]]; then
   echo "[pct-scan] PCT dependencies are missing. Run ./scripts/setup_pct_dependencies.sh." >&2
   return 2
 fi
 
 export LD_LIBRARY_PATH="$PCT_DEPS_ROOT/gtsam-4.2/lib:$PCT_DEPS_ROOT/osqp-1.0.0/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-source "$PCT_SCAN_WORKSPACE_ROOT/install/setup.bash"
+source "$PCT_SCAN_PROJECT_ROOT/install/setup.bash"
 set -u
 
 export PCT_SCAN_ROS2_ROOT="$PCT_SCAN_PROJECT_ROOT"

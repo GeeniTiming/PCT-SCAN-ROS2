@@ -1,7 +1,7 @@
 # Vendored PCT Planner ROS 2 sources
 
 This directory contains the source form required to build the PCT global
-planner and the CPU tomography generator inside the same colcon
+planner and the optional CUDA tomography generator inside the same colcon
 workspace as PCT-SCAN-ROS2.
 
 Upstream lineage:
@@ -19,12 +19,12 @@ in `NOTICE`.
 
 Modifications made for this repository in August 2026 include:
 
-- ROS 2 Foxy packaging and launch integration for Ubuntu 20.04/aarch64;
+- ROS 2 Humble packaging and launch integration;
 - relocatable tomogram paths instead of home-directory hard coding;
 - interactive 3-D start/goal markers and explicit route planning;
 - raw tomogram visualization and coordinate conversion;
 - dynamic tomogram-layer endpoint snapping;
-- OSQP 1.0 and GTSAM 4.2 compatibility with system CMake 3.16.3.
+- OSQP 1.0 and GTSAM 4.2 build compatibility.
 
 These PCT-derived files remain GPL-2.0-or-later. They are not relicensed by
 the Apache-2.0 license used by the SCAN planner packages.
