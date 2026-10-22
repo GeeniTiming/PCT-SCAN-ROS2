@@ -46,6 +46,9 @@ scan_planner_node:
     # 导航模式：1=RViz 手动目标；2=预设航点(需 fsm.waypoints)；3=参考路径(/pct_path)。
     # 真机走 PCT 时用 3
     fsm.navi_mode: 3
+    # PCT z is terrain height; SCAN start state uses lidar odometry height.
+    # Anchor each new path at current odometry z and preserve terrain slopes.
+    fsm.reference_path_align_height_to_odom: true
     # 重规划阈值(m)：局部参考点相对本条轨迹起点前进超过该距离即重规划。
     # 调大 → 重规划少、省算力但贴合参考路径更松；调小 → 更勤、易抖
     fsm.thresh_replan: 0.3

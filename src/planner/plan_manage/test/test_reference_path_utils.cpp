@@ -123,4 +123,24 @@ TEST(ReferencePathUtils, PiecewiseLinearTrajectoryRejectsInvalidInput)
       {{0.0, 0.0, 0.0}, {1.0, 0.0, 0.0}}, 0.0, trajectory));
 }
 
+TEST(ReferencePathUtils, AlignsTerrainHeightToOdomAndPreservesSlope)
+{
+  double offset = 0.0;
+  ASSERT_TRUE(scan_planner::referenceHeightOffset(-0.564, 0.146, offset));
+  EXPECT_NEAR(offset, 0.710, 1e-9);
+  nav_msgs::msg::Path path;
+  path.poses = {pose(0.0, 0.0, -0.564), pose(2.0, 0.0, -0.546)};
+  path.poses.back().pose.orientation.z = std::sin(-0.5);
+  path.poses.back().pose.orientation.w = std::cos(-0.5);
+  std::vector<Eigen::Vector3d> points;
+  double heading;
+  ASSERT_TRUE(scan_planner::prepareReferenceWaypoints(path, offset, 0.5, points, nullptr, 0.0, &heading));
+  EXPECT_NEAR(points.front().z(), 0.146, 1e-9);
+  EXPECT_NEAR(points.back().z(), 0.164, 1e-9);
+  EXPECT_NEAR(points.back().x(), 2.0, 1e-9);
+  EXPECT_NEAR(heading, -1.0, 1e-9);
+  EXPECT_FALSE(scan_planner::referenceHeightOffset(std::numeric_limits<double>::quiet_NaN(), 0.146, offset));
+  EXPECT_FALSE(scan_planner::referenceHeightOffset(-0.564, std::numeric_limits<double>::infinity(), offset));
+}
+
 }  // namespace

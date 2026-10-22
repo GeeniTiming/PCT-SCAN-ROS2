@@ -79,6 +79,16 @@ inline std::vector<Eigen::Vector3d> simplifyReferenceWaypoints(
   return simplified;
 }
 
+// PCT points describe the terrain; odometry describes the tracked sensor.
+// Keep terrain elevation changes while anchoring the first point to odometry.
+inline bool referenceHeightOffset(double terrain_start_z, double odom_z, double &offset)
+{
+  if (!std::isfinite(terrain_start_z) || !std::isfinite(odom_z))
+    return false;
+  offset = odom_z - terrain_start_z;
+  return std::isfinite(offset);
+}
+
 inline bool prepareReferenceWaypoints(
     const nav_msgs::msg::Path &path,
     double body_height,

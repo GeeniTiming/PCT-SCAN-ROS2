@@ -49,6 +49,7 @@ namespace scan_planner
     self_double_cylinder_radius_ = load_parameter<double>(node_, "grid_map.double_cylinder_radius", 0.0);
     self_double_cylinder_offset_ = load_parameter<double>(node_, "grid_map.double_cylinder_offset", 0.0);
     body_height_ = load_parameter<double>(node_, "grid_map.body_height", 0.0);
+    load_parameter<bool>(node_, "fsm.reference_path_align_height_to_odom", false);
     reference_path_min_distance_ =
         load_parameter<double>(node_, "fsm.reference_path_min_distance", 0.5);
     reference_path_simplify_tolerance_ =
@@ -380,7 +381,19 @@ namespace scan_planner
     std::vector<Eigen::Vector3d> waypoints;
     std::string path_error;
     double terminal_yaw = std::numeric_limits<double>::quiet_NaN();
-    if (!prepareReferenceWaypoints(*msg, body_height_, reference_path_min_distance_,
+    double path_height_offset = body_height_;
+    if (node_->get_parameter("fsm.reference_path_align_height_to_odom").as_bool())
+    {
+      if (!referenceHeightOffset(msg->poses.front().pose.position.z, odom_pos_(2), path_height_offset))
+      {
+        RCLCPP_ERROR(node_->get_logger(), "Ignoring initial_path: invalid terrain/odometry height");
+        return;
+      }
+      RCLCPP_INFO(node_->get_logger(),
+                  "Reference height aligned to odometry: terrain_start_z=%.3f, odom_z=%.3f, offset=%.3f (fixed body_height=%.3f)",
+                  msg->poses.front().pose.position.z, odom_pos_(2), path_height_offset, body_height_);
+    }
+    if (!prepareReferenceWaypoints(*msg, path_height_offset, reference_path_min_distance_,
                                    waypoints, &path_error,
                                    reference_path_simplify_tolerance_, &terminal_yaw))
     {
