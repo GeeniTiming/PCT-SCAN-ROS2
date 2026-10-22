@@ -52,12 +52,12 @@ closed_loop_controller:
     kd_yaw: 0.0
     # 【重要】body 系前进速度上限(m/s)：应 ≤ 规划速度(manager/optimization.max_vel)。
     # 控制器硬钳制，参考比它快就会持续追不上/过冲
-    max_vx: 0.15
+    max_vx: 0.30
     # body 系横向速度上限(m/s)：四足/底盘需支持真侧移，否则仅作补偿用
     max_vy: 0.05
     # 【重要】偏航角速度上限(rad/s)：代码内还会再硬钳到 1.0。
     # 调小更稳但转向更慢；调大更灵活但易过冲摆动
-    max_vyaw: 0.2
+    max_vyaw: 0.40
     # 到点判定距离(m)：轨迹走完且位置误差小于该值才发零速停住
     finish_dist: 0.10
     # 【终点朝向】收尾转向容差(rad)：有 yaw 曲线时，位置到位但航向误差大于

@@ -172,9 +172,9 @@ scan_planner_node:
     # ------------------------------------------------------------------
     # 【重要】最大速度(m/s)：用于全局折线参考的时间参数化与可行性检查。
     # 应与控制器 max_vx 匹配；调大更容易违反加速度约束
-    manager.max_vel: 0.15
+    manager.max_vel: 0.30
     # 【重要】最大加速度(m/s^2)：B 样条可行性检查/时间重分配用。调小更平缓、更肉
-    manager.max_acc: 0.2
+    manager.max_acc: 0.40
     # 最大加加速度(m/s^3)：当前主要作为参数保留
     manager.max_jerk: 4.0
     # 控制点间距(m)：B 样条离散密度(ctrl_pt_dist)。调小更贴合但更慢
@@ -199,9 +199,9 @@ scan_planner_node:
     # 期望安全间距(m)：轨迹与障碍的期望余量(cps_.clearance)
     optimization.dist0: 0.2
     # 【重要】优化器速度上限(m/s)：应 ≤ manager.max_vel
-    optimization.max_vel: 0.15
+    optimization.max_vel: 0.30
     # 【重要】优化器加速度上限(m/s^2)：应 ≤ manager.max_acc
-    optimization.max_acc: 0.2
+    optimization.max_acc: 0.40
     # B 样条阶数：3=三次（默认，通常不要改）
     optimization.order: 3
 
