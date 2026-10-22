@@ -1,6 +1,7 @@
 // #include <fstream>
 #include <plan_manage/planner_manager.h>
 #include <plan_manage/polyline_trajectory_utils.h>
+#include <plan_manage/trajectory_reuse_utils.h>
 #include <chrono>
 #include <thread>
 
@@ -175,6 +176,14 @@ namespace scan_planner
 
         double t;
         double t_cur = (node_->now() - local_data_.start_time_).seconds();
+        // An expired trajectory has no remaining samples to interpolate.
+        if (!canReuseTrajectory(t_cur, local_data_.duration_))
+        {
+          RCLCPP_WARN(node_->get_logger(), "Previous trajectory expired or invalid; regenerating from current odometry");
+          flag_force_polynomial = true;
+          flag_regenerate = true;
+          continue;
+        }
 
         vector<double> pseudo_arc_length;
         vector<Eigen::Vector3d> segment_point;
@@ -213,6 +222,14 @@ namespace scan_planner
           }
         }
 
+        if (!hasUsableArcLength(pseudo_arc_length, segment_point.size()))
+        {
+          RCLCPP_WARN(node_->get_logger(), "Previous trajectory has insufficient samples or zero arc length; regenerating");
+          flag_force_polynomial = true;
+          flag_regenerate = true;
+          continue;
+        }
+
         double sample_length = 0;
         double cps_dist = pp_.ctrl_pt_dist * 1.5; // cps_dist will be divided by 1.5 in the next
         size_t id = 0;
@@ -222,7 +239,7 @@ namespace scan_planner
           point_set.clear();
           sample_length = 0;
           id = 0;
-          while ((id <= pseudo_arc_length.size() - 2) && sample_length <= pseudo_arc_length.back())
+          while ((id + 1 < pseudo_arc_length.size()) && sample_length <= pseudo_arc_length.back())
           {
             if (sample_length >= pseudo_arc_length[id] && sample_length < pseudo_arc_length[id + 1])
             {

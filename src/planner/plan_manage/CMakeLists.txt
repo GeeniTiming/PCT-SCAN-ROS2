@@ -60,6 +60,9 @@ install(PROGRAMS
   DESTINATION lib/${PROJECT_NAME} OPTIONAL)
 
 if(BUILD_TESTING)
+  add_executable(test_trajectory_reuse_utils test/test_trajectory_reuse_utils.cpp)
+  target_include_directories(test_trajectory_reuse_utils PRIVATE include)
+  add_test(NAME test_trajectory_reuse_utils COMMAND test_trajectory_reuse_utils)
   find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
   find_package(launch_testing_ament_cmake REQUIRED)
