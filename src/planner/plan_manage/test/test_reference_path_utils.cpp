@@ -1,4 +1,6 @@
 #include <limits>
+#include <plan_manage/terminal_heading_utils.h>
+#include <plan_manage/arrival_policy.h>
 
 #include <gtest/gtest.h>
 
@@ -141,6 +143,37 @@ TEST(ReferencePathUtils, AlignsTerrainHeightToOdomAndPreservesSlope)
   EXPECT_NEAR(heading, -1.0, 1e-9);
   EXPECT_FALSE(scan_planner::referenceHeightOffset(std::numeric_limits<double>::quiet_NaN(), 0.146, offset));
   EXPECT_FALSE(scan_planner::referenceHeightOffset(-0.564, std::numeric_limits<double>::infinity(), offset));
+}
+
+TEST(ReferencePathUtils, ZeroYawIsExplicitAndInvalidQuaternionHasNoYaw)
+{
+  nav_msgs::msg::Path path;
+  path.poses = {pose(0,0,0), pose(1,0,0)};
+  std::vector<Eigen::Vector3d> points; double yaw;
+  ASSERT_TRUE(scan_planner::prepareReferenceWaypoints(path,0.2,0.5,points,nullptr,0,&yaw));
+  EXPECT_DOUBLE_EQ(yaw,0.0);
+  path.poses.back().pose.orientation.w=2.0;
+  ASSERT_TRUE(scan_planner::prepareReferenceWaypoints(path,0.2,0.5,points,nullptr,0,&yaw));
+  EXPECT_DOUBLE_EQ(yaw,0.0);
+  path.poses.back().pose.orientation.w=0.0;
+  ASSERT_TRUE(scan_planner::prepareReferenceWaypoints(path,0.2,0.5,points,nullptr,0,&yaw));
+  EXPECT_TRUE(std::isnan(yaw));
+  path.poses.back().pose.orientation.z=std::numeric_limits<double>::infinity();
+  ASSERT_TRUE(scan_planner::prepareReferenceWaypoints(path,0.2,0.5,points,nullptr,0,&yaw));
+  EXPECT_TRUE(std::isnan(yaw));
+}
+
+TEST(ReferencePathUtils, HeadingRequiredBeforeStableArrivalAndWrapsPi)
+{
+  EXPECT_FALSE(scan_planner::terminalYawReached(0.0,-1.97,0.1));
+  EXPECT_TRUE(scan_planner::terminalYawReached(0.0,0.05,0.1));
+  EXPECT_TRUE(scan_planner::terminalYawReached(3.13,-3.13,0.1));
+  EXPECT_FALSE(scan_planner::terminalYawReached(0.0,std::numeric_limits<double>::quiet_NaN(),0.1));
+  scan_planner::ArrivalPolicy policy;
+  EXPECT_FALSE(policy.settled(true,0.12,0.01,0.0));
+  policy.reset();  // yaw outside tolerance must reset the arrival dwell.
+  EXPECT_FALSE(policy.settled(true,0.12,0.01,1.0));
+  EXPECT_TRUE(policy.settled(true,0.12,0.01,1.6));
 }
 
 }  // namespace

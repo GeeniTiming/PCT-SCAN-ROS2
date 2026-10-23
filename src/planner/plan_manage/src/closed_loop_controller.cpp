@@ -126,6 +126,9 @@ private:
     yaw_pts_ = msg->yaw_pts;
     yaw_dt_ = msg->yaw_dt;
     has_yaw_profile_ = !yaw_pts_.empty() && yaw_dt_ > 0.0;
+    terminal_hold_ = has_yaw_profile_ && points.cols() > 0;
+    for (Eigen::Index i = 1; i < points.cols(); ++i)
+      terminal_hold_ = terminal_hold_ && (points.col(i) - points.col(0)).norm() < 1e-6;
     traj_id_ = msg->traj_id;
     // 直接采用消息里的 start_time 作为轨迹时间原点：规划器在 freeze 时会前推
     // start_time，因此这里天然与规划器时钟一致，重规划也不会把参考点强制拉回 0。
@@ -171,6 +174,13 @@ private:
     const double yaw_error = normalizeAngle(estimateDesiredYaw(t_eval, pos_des) - odom_yaw_);
     const double yaw_command =
         std::clamp(kp_yaw_ * yaw_error - kd_yaw_ * odom_yaw_rate_, -max_vyaw_, max_vyaw_);
+    if (terminal_hold_)
+    {
+      publishExecutionFrozen(false);
+      // Finish turning without feeding odometry noise into translation.
+      publishStop(std::abs(yaw_error) > finish_yaw_tolerance_ ? yaw_command : 0.0);
+      return;
+    }
     // A yaw profile deliberately turns the robot while it moves, so the
     // heading-error freeze must not stop it; it only applies to tangent control.
     if (!has_yaw_profile_ && std::abs(yaw_error) > heading_error_threshold_)
@@ -237,6 +247,7 @@ private:
   std::vector<double> yaw_pts_;
   double yaw_dt_{0.0};
   bool has_yaw_profile_{false};
+  bool terminal_hold_{false};
 };
 }  // namespace scan_planner
 

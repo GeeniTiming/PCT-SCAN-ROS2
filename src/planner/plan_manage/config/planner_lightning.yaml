@@ -72,6 +72,8 @@ scan_planner_node:
     # 【终点朝向】总开关：true 时到达终点前边转边走，终点朝向由 /pct_path 末帧
     # orientation（RViz 2D Goal Pose / Goal 旋转环）决定。false=纯切向，原行为
     fsm.enable_goal_yaw: true
+    # Must match the controller finish_yaw_tolerance (rad).
+    fsm.goal_yaw_tolerance: 0.10
     # 转弯参考角速度(rad/s)：铺开距离 S_blend = v*|Δψ|/rate 的参考值
     fsm.terminal_yaw_rate: 0.7
     # 最小铺开距离(m)：S_blend 下限，太小的目标朝向也会留出这段距离转向

@@ -152,15 +152,17 @@ inline bool prepareReferenceWaypoints(
 
   if (terminal_yaw)
   {
-    // The final pose orientation encodes the desired terminal heading.  An
-    // identity (or absent) orientation carries no heading, so report NaN and
-    // let the FSM fall back to the tangent behaviour.
+    // Identity is a valid requested yaw of zero; only an invalid quaternion
+    // means that terminal heading is absent.
     const auto &q = path.poses.back().pose.orientation;
-    const double norm_xy = std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z);
-    *terminal_yaw = (norm_xy > 1e-3)
-        ? std::atan2(2.0 * (q.w * q.z + q.x * q.y),
-                     1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        : std::numeric_limits<double>::quiet_NaN();
+    const double norm = std::sqrt(q.x*q.x + q.y*q.y + q.z*q.z + q.w*q.w);
+    if (std::isfinite(norm) && norm > 1e-6)
+    {
+      const double x=q.x/norm, y=q.y/norm, z=q.z/norm, w=q.w/norm;
+      *terminal_yaw = std::atan2(2.0*(w*z + x*y), 1.0 - 2.0*(y*y + z*z));
+    }
+    else
+      *terminal_yaw = std::numeric_limits<double>::quiet_NaN();
   }
 
   return true;

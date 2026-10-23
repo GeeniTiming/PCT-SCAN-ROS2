@@ -1,6 +1,7 @@
 
 #include <plan_manage/scan_replan_fsm.h>
 #include <plan_manage/reference_path_utils.h>
+#include <plan_manage/terminal_heading_utils.h>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -55,6 +56,7 @@ namespace scan_planner
     reference_path_simplify_tolerance_ =
         load_parameter<double>(node_, "fsm.reference_path_simplify_tolerance", 0.0);
     self_inflation_frame_id_ = load_parameter<std::string>(node_, "grid_map.frame_id", "world");
+    goal_yaw_tolerance_ = load_parameter<double>(node_, "fsm.goal_yaw_tolerance", 0.10);
     enable_goal_yaw_ = load_parameter<bool>(node_, "fsm.enable_goal_yaw", false);
     terminal_yaw_rate_ = load_parameter<double>(node_, "fsm.terminal_yaw_rate", 0.7);
     terminal_blend_min_dist_ = load_parameter<double>(node_, "fsm.terminal_blend_min_dist", 0.5);
@@ -400,6 +402,9 @@ namespace scan_planner
       RCLCPP_WARN(node_->get_logger(), "Ignoring initial_path: %s", path_error.c_str());
       return;
     }
+    arrival_hold_ = false;
+    terminal_alignment_active_ = false;
+    arrival_policy_.reset();
     goal_yaw_ = terminal_yaw;
     goal_yaw_valid_ = std::isfinite(goal_yaw_);
 
@@ -653,15 +658,34 @@ namespace scan_planner
         // 只有定位真正丢失（超过 fsm.odom_lost_timeout）才急停。
         if (odom_lost) {
           arrival_policy_.reset();
-          if (!arrival_hold_) { callEmergencyStop(odom_pos_); arrival_hold_ = true; }
+          if (!arrival_hold_ || terminal_alignment_active_) {
+            callEmergencyStop(odom_pos_);
+            arrival_hold_ = true;
+            terminal_alignment_active_ = false;
+          }
         }
         return;  // Never declare arrival from stale localization.
       }
       const double goal_distance = (end_pt_ - odom_pos_).head<2>().norm();
       if (arrival_policy_.near(odom_fresh, goal_distance)) {
-        if (!arrival_hold_) { callEmergencyStop(odom_pos_); arrival_hold_ = true; }
+        const bool align_heading = enable_goal_yaw_ && goal_yaw_valid_ &&
+            navi_mode_ == NAVI_MODE::REFERENCE_PATH;
+        if (!arrival_hold_ || (align_heading && !terminal_alignment_active_)) {
+          callEmergencyStop(odom_pos_, align_heading);
+          arrival_hold_ = true;
+          terminal_alignment_active_ = align_heading;
+          if (align_heading)
+            RCLCPP_INFO(node_->get_logger(), "TERMINAL_ALIGN_START: goal_yaw=%.3f rad", goal_yaw_);
+        }
+        if (align_heading && !terminalYawReached(goal_yaw_, getOdomYaw(), goal_yaw_tolerance_)) {
+          arrival_policy_.reset();
+          return;
+        }
         if (arrival_policy_.settled(odom_fresh, goal_distance,
                                    odom_vel_.head<2>().norm(), steady_s)) {
+          if (align_heading)
+            RCLCPP_INFO(node_->get_logger(), "TERMINAL_ALIGN_COMPLETE: goal_yaw=%.3f, odom_yaw=%.3f rad", goal_yaw_, getOdomYaw());
+          terminal_alignment_active_ = false;
           arrival_hold_ = false;
           arrival_policy_.reset();
           if (isWaypointSequenceMode() && current_wp_ + 1 < (int)active_waypoints_.size()) {
@@ -1063,7 +1087,7 @@ namespace scan_planner
     return plan_success;
   }
 
-  bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos)
+  bool SCANReplanFSM::callEmergencyStop(Eigen::Vector3d stop_pos, bool align_goal_yaw)
   {
 
     planner_manager_->EmergencyStop(stop_pos);
@@ -1092,6 +1116,13 @@ namespace scan_planner
     for (int i = 0; i < knots.rows(); ++i)
     {
       bspline.knots.push_back(knots(i));
+    }
+
+    if (align_goal_yaw && enable_goal_yaw_ && goal_yaw_valid_)
+    {
+      // Constant position plus explicit yaw denotes an in-place terminal turn.
+      bspline.yaw_pts = {goal_yaw_, goal_yaw_};
+      bspline.yaw_dt = std::max(info->duration_, 1e-3);
     }
 
     bspline_pub_->publish(bspline);

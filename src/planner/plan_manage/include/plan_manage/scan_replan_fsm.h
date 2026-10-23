@@ -73,6 +73,8 @@ namespace scan_planner
 
     /* goal-yaw (terminal heading) parameters */
     double goal_yaw_{0.0};
+    double goal_yaw_tolerance_{0.10};
+    bool terminal_alignment_active_{false};
     bool goal_yaw_valid_{false};
     bool enable_goal_yaw_{false};
     double terminal_yaw_rate_{0.7};
@@ -114,7 +116,7 @@ namespace scan_planner
 
     /* helper functions */
     bool callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj); // front-end and back-end method
-    bool callEmergencyStop(Eigen::Vector3d stop_pos);                          // front-end and back-end method
+    bool callEmergencyStop(Eigen::Vector3d stop_pos, bool align_goal_yaw = false);                          // front-end and back-end method
     bool planFromCurrentTraj();
     void setStartStateFromOdomOrCurrentTraj();
 
