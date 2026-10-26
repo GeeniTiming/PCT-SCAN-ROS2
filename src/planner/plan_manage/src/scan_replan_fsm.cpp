@@ -572,7 +572,7 @@ namespace scan_planner
 
   void SCANReplanFSM::publishSelfInflationMarker()
   {
-    const double radius = std::max(0.0, self_double_cylinder_radius_);
+    const double radius = planner_manager_->grid_map_->collisionRadius();
     const double z_up = std::max(0.0, self_inflation_z_up_);
     const double z_down = std::max(0.0, self_inflation_z_down_);
     const double height = std::max(1e-3, z_up + z_down);
@@ -597,8 +597,8 @@ namespace scan_planner
     center(2) += 0.5 * (z_up - z_down);
 
     Eigen::Vector3d heading(std::cos(getOdomYaw()), std::sin(getOdomYaw()), 0.0);
-    Eigen::Vector3d front = center + self_double_cylinder_offset_ * heading;
-    Eigen::Vector3d rear = center - self_double_cylinder_offset_ * heading;
+    Eigen::Vector3d front = center + planner_manager_->grid_map_->collisionOffset() * heading;
+    Eigen::Vector3d rear = center - planner_manager_->grid_map_->collisionOffset() * heading;
 
     marker.id = 0;
     marker.pose.position.x = front(0);
@@ -1043,8 +1043,15 @@ namespace scan_planner
       return false;
     }
 
+    const auto trace_map = planner_manager_->grid_map_;
+    if (plan_env::trace::enabled()) plan_env::trace::event("plan_begin",
+        ",\"cloud_seq\":" + std::to_string(trace_map->traceCloudSeq()) +
+        ",\"map_version\":" + std::to_string(trace_map->traceMapVersion()));
     bool plan_success =
         planner_manager_->reboundReplan(start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_, (have_new_target_ || flag_use_poly_init), flag_randomPolyTraj);
+    if (plan_env::trace::enabled()) plan_env::trace::event("plan_end",
+        ",\"success\":" + std::to_string(plan_success) +
+        ",\"map_version\":" + std::to_string(trace_map->traceMapVersion()));
     have_new_target_ = false;
 
     cout << "final_plan_success=" << plan_success << endl;
@@ -1079,6 +1086,10 @@ namespace scan_planner
       }
 
       appendYawProfile(bspline, info);
+      if (plan_env::trace::enabled()) plan_env::trace::event("trajectory_publish",
+          ",\"traj_id\":" + std::to_string(bspline.traj_id) +
+          ",\"cloud_seq\":" + std::to_string(planner_manager_->grid_map_->traceCloudSeq()) +
+          ",\"map_version\":" + std::to_string(planner_manager_->grid_map_->traceMapVersion()));
       bspline_pub_->publish(bspline);
 
       visualization_->displayOptimalTraj(info->position_traj_, 0);
@@ -1125,7 +1136,11 @@ namespace scan_planner
       bspline.yaw_dt = std::max(info->duration_, 1e-3);
     }
 
-    bspline_pub_->publish(bspline);
+    if (plan_env::trace::enabled()) plan_env::trace::event("trajectory_publish",
+          ",\"traj_id\":" + std::to_string(bspline.traj_id) +
+          ",\"cloud_seq\":" + std::to_string(planner_manager_->grid_map_->traceCloudSeq()) +
+          ",\"map_version\":" + std::to_string(planner_manager_->grid_map_->traceMapVersion()));
+      bspline_pub_->publish(bspline);
 
     return true;
   }

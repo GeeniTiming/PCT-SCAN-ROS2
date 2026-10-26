@@ -41,4 +41,11 @@ ament_export_targets(export_plan_env HAS_LIBRARY_TARGET)
 ament_export_dependencies(
   cv_bridge Eigen3 geometry_msgs message_filters nav_msgs OpenCV PCL pcl_conversions
   rclcpp sensor_msgs tf2 tf2_ros visualization_msgs)
+if(BUILD_TESTING)
+  enable_testing()
+  add_executable(footprint_bounds_test test/footprint_bounds_test.cpp)
+  target_include_directories(footprint_bounds_test PRIVATE include)
+  add_test(NAME footprint_bounds_test COMMAND footprint_bounds_test)
+endif()
+
 ament_package()

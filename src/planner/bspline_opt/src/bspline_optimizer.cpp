@@ -236,6 +236,7 @@ namespace scan_planner
       for (int j = segment_ids[i].first + 1; j < segment_ids[i].second; ++j)
       {
         Eigen::Vector3d ctrl_pts_law(cps_.points.col(j + 1) - cps_.points.col(j - 1)), intersection_point;
+        bool intersection_found = false;
         int Astar_id = a_star_paths[i].size() / 2, last_Astar_id; // Let "Astar_id = id_of_the_most_far_away_Astar_point" will be better, but it needs more computation
         double val = (a_star_paths[i][Astar_id] - cps_.points.col(j)).dot(ctrl_pts_law), last_val = val;
         while (Astar_id >= 0 && Astar_id < (int)a_star_paths[i].size())
@@ -266,16 +267,17 @@ namespace scan_planner
 
             //cout << "i=" << i << " j=" << j << " Astar_id=" << Astar_id << " last_Astar_id=" << last_Astar_id << " intersection_point = " << intersection_point.transpose() << endl;
 
-            got_intersection_id = j;
+            intersection_found = true;
             break;
           }
         }
 
-        if (got_intersection_id >= 0)
+        // A previous point's intersection is not evidence for this point.
+        // Only mark a seed after both its base point and direction exist.
+        if (intersection_found)
         {
-          cps_.flag_temp[j] = true;
           double length = (intersection_point - cps_.points.col(j)).norm();
-          if (length > 1e-5)
+          if (std::isfinite(length) && length > 1e-5)
           {
             for (double a = length; a >= 0.0; a -= grid_map_->getResolution())
             {
@@ -289,6 +291,8 @@ namespace scan_planner
                   a += grid_map_->getResolution();
                 cps_.base_point[j].push_back((a / length) * intersection_point + (1 - a / length) * cps_.points.col(j));
                 cps_.direction[j].push_back((intersection_point - cps_.points.col(j)).normalized());
+                cps_.flag_temp[j] = true;
+                got_intersection_id = j;
                 break;
               }
             }

@@ -33,6 +33,26 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.obstacles_inflation_z_down", mp_.obstacles_inflation_z_down, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_radius", mp_.double_cylinder_radius_, -1.0);
   load_parameter(node_, "grid_map.double_cylinder_offset", mp_.double_cylinder_offset_, 0.0);
+  load_parameter(node_, "grid_map.footprint_model", mp_.footprint_model_, string("legacy_double_cylinder"));
+  load_parameter(node_, "grid_map.footprint_length", mp_.footprint_length_, 0.82);
+  load_parameter(node_, "grid_map.footprint_width", mp_.footprint_width_, 0.43);
+  load_parameter(node_, "grid_map.footprint_offset_x", mp_.footprint_offset_x_, 0.0);
+  load_parameter(node_, "grid_map.footprint_offset_y", mp_.footprint_offset_y_, 0.0);
+  load_parameter(node_, "grid_map.safety_clearance", mp_.safety_clearance_, 0.30);
+  if (mp_.footprint_model_ == "circumscribed_circle") {
+    mp_.inflation_radius_xy_ = plan_env::circumscribedFootprintRadius(
+        mp_.footprint_length_, mp_.footprint_width_, mp_.footprint_offset_x_,
+        mp_.footprint_offset_y_, mp_.safety_clearance_, mp_.resolution_);
+    RCLCPP_INFO(node_->get_logger(),
+        "[Footprint] circumscribed_circle length=%.3f width=%.3f offset=(%.3f,%.3f) clearance=%.3f grid_guard=%.3f inflation_radius=%.3f",
+        mp_.footprint_length_, mp_.footprint_width_, mp_.footprint_offset_x_,
+        mp_.footprint_offset_y_, mp_.safety_clearance_, std::sqrt(2.0)*mp_.resolution_, mp_.inflation_radius_xy_);
+  } else if (mp_.footprint_model_ == "legacy_double_cylinder") {
+    mp_.inflation_radius_xy_ = std::max(0.0, mp_.double_cylinder_radius_);
+  } else {
+    throw std::invalid_argument("unknown grid_map.footprint_model: " + mp_.footprint_model_);
+  }
+
   load_parameter(node_, "grid_map.map_sliding_en", mp_.map_sliding_en_, true);
   load_parameter(node_, "grid_map.map_sliding_thresh", mp_.map_sliding_thresh_, mp_.resolution_);
 
@@ -213,7 +233,7 @@ void GridMap::updateMapBoundaryFromIndex()
 
 void GridMap::rebuildInflationOffsets()
 {
-  const double double_radius = std::max(0.0, mp_.double_cylinder_radius_);
+  const double double_radius = mp_.inflation_radius_xy_;
   const int inf_step_xy = ceil(double_radius / mp_.resolution_);
   const int inf_step_z_up = ceil(mp_.obstacles_inflation_z_up / mp_.resolution_);
   const int inf_step_z_down = ceil(mp_.obstacles_inflation_z_down / mp_.resolution_);
@@ -751,6 +771,8 @@ void GridMap::updateOccupancyCallback()
   if (!md_.occ_need_update_)
     return;
 
+  if (plan_env::trace::enabled()) plan_env::trace::event("map_begin",
+      ",\"cloud_seq\":" + std::to_string(trace_pending_cloud_seq_));
   /* update occupancy */
   // ros::Time t1, t2, t3, t4;
   // t1 = ros::Time::now();
@@ -759,6 +781,12 @@ void GridMap::updateOccupancyCallback()
     projectDepthImage();
   // t2 = ros::Time::now();
   raycastProcess();
+  trace_map_cloud_seq_ = md_.use_cloud_update_ ? trace_pending_cloud_seq_ : 0;
+  ++trace_map_version_;
+  if (plan_env::trace::enabled()) plan_env::trace::event("map_commit",
+      ",\"cloud_seq\":" + std::to_string(trace_map_cloud_seq_) +
+      ",\"map_version\":" + std::to_string(trace_map_version_));
+
   // t3 = ros::Time::now();
 
   // t4 = ros::Time::now();
@@ -865,6 +893,7 @@ void GridMap::sensorPoseCallback(const nav_msgs::msg::Odometry::ConstSharedPtr p
 
   md_.ray_pos_ = ray_pos;
   md_.ray_q_ = ray_q;
+  trace_sensor_odom_stamp_ns_ = static_cast<long long>(pose_msg->header.stamp.sec)*1000000000LL+pose_msg->header.stamp.nanosec;
   md_.has_ray_pose_ = true;
   updateSlidingMap(md_.ray_pos_);
 }
@@ -877,6 +906,12 @@ void GridMap::slidingMapFrameCallback(const nav_msgs::msg::Odometry::ConstShared
 
 void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr img)
 {
+  const auto input_seq = ++trace_cloud_seq_;
+  if (plan_env::trace::enabled()) plan_env::trace::event("cloud_begin",
+      ",\"cloud_seq\":" + std::to_string(input_seq) +
+      ",\"cloud_stamp_ns\":" + std::to_string(static_cast<long long>(img->header.stamp.sec)*1000000000LL+img->header.stamp.nanosec) +
+      ",\"pose_stamp_ns\":" + std::to_string(trace_sensor_odom_stamp_ns_));
+
   if (mp_.sensor_type_ != "lidar")
     return;
 
@@ -941,6 +976,10 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
 
   md_.use_cloud_update_ = true;
   md_.occ_need_update_ = true;
+  trace_pending_cloud_seq_ = input_seq;
+  if (plan_env::trace::enabled()) plan_env::trace::event("cloud_accepted",
+      ",\"cloud_seq\":" + std::to_string(input_seq));
+
 }
 
 void GridMap::publishMap()

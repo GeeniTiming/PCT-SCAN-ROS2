@@ -14,6 +14,7 @@
 #include <tf2/utils.h>
 
 #include "bspline_opt/uniform_bspline.h"
+#include "plan_env/pipeline_trace.h"
 
 namespace scan_planner
 {
@@ -92,11 +93,24 @@ private:
         ? odom_yaw_ : std::atan2(direction.y(), direction.x());
   }
 
+  void publishCommand(const geometry_msgs::msg::Twist& command) {
+    cmd_vel_pub_->publish(command);
+    ++trace_cmd_seq_;
+    if (plan_env::trace::enabled()) plan_env::trace::event("command_publish",
+        ",\"cmd_seq\":" + std::to_string(trace_cmd_seq_) +
+        ",\"traj_id\":" + std::to_string(traj_id_) +
+        ",\"control_begin_ns\":" + std::to_string(trace_control_begin_ns_) +
+        ",\"odom_stamp_ns\":" + std::to_string(trace_odom_stamp_ns_) +
+        ",\"vx\":" + std::to_string(command.linear.x) +
+        ",\"vy\":" + std::to_string(command.linear.y) +
+        ",\"wz\":" + std::to_string(command.angular.z));
+  }
+
   void publishStop(double yaw_rate = 0.0)
   {
     geometry_msgs::msg::Twist cmd;
     cmd.angular.z = std::clamp(yaw_rate, -max_vyaw_, max_vyaw_);
-    cmd_vel_pub_->publish(cmd);
+    publishCommand(cmd);
   }
 
   void publishExecutionFrozen(bool frozen)
@@ -130,6 +144,8 @@ private:
     for (Eigen::Index i = 1; i < points.cols(); ++i)
       terminal_hold_ = terminal_hold_ && (points.col(i) - points.col(0)).norm() < 1e-6;
     traj_id_ = msg->traj_id;
+    if (plan_env::trace::enabled()) plan_env::trace::event("trajectory_received",
+        ",\"traj_id\":" + std::to_string(traj_id_));
     // 直接采用消息里的 start_time 作为轨迹时间原点：规划器在 freeze 时会前推
     // start_time，因此这里天然与规划器时钟一致，重规划也不会把参考点强制拉回 0。
     if (msg->start_time.sec == 0 && msg->start_time.nanosec == 0)
@@ -143,6 +159,7 @@ private:
 
   void odomCallback(const nav_msgs::msg::Odometry::ConstSharedPtr msg)
   {
+    trace_odom_stamp_ns_ = static_cast<long long>(msg->header.stamp.sec)*1000000000LL+msg->header.stamp.nanosec;
     odom_pos_ << msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z;
     // /lightning/odom 的 twist 是 map 系速度（loc_system.cc: velocity = pose.so3() * vel_b_）
     odom_vel_ << msg->twist.twist.linear.x, msg->twist.twist.linear.y, msg->twist.twist.linear.z;
@@ -161,6 +178,7 @@ private:
 
   void cmdCallback()
   {
+    trace_control_begin_ns_ = plan_env::trace::enabled() ? plan_env::trace::steadyNs() : 0;
     if (!receive_traj_ || !have_odom_)
     {
       publishExecutionFrozen(false);
@@ -217,12 +235,12 @@ private:
         // instead of zeroing everything and stopping mis-aimed.
         geometry_msgs::msg::Twist rotate_cmd;
         rotate_cmd.angular.z = yaw_command;
-        cmd_vel_pub_->publish(rotate_cmd);
+        publishCommand(rotate_cmd);
         return;
       }
       command = geometry_msgs::msg::Twist();
     }
-    cmd_vel_pub_->publish(command);
+    publishCommand(command);
   }
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_vel_pub_;
@@ -230,6 +248,8 @@ private:
   rclcpp::Subscription<scan_planner_msgs::msg::Bspline>::SharedPtr bspline_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::TimerBase::SharedPtr cmd_timer_;
+  std::uint64_t trace_cmd_seq_{0};
+  long long trace_control_begin_ns_{0}, trace_odom_stamp_ns_{0};
   bool receive_traj_{false};
   bool have_odom_{false};
   std::vector<UniformBspline> traj_;

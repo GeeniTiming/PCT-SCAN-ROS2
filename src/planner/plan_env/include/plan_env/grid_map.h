@@ -2,6 +2,7 @@
 #define _GRID_MAP_H
 
 #include <Eigen/Eigen>
+#include <cstdint>
 #include <Eigen/StdVector>
 #include <algorithm>
 #include <cv_bridge/cv_bridge.h>
@@ -30,6 +31,8 @@
 #include <message_filters/time_synchronizer.h>
 
 #include <plan_env/raycast.h>
+#include <plan_env/footprint_bounds.h>
+#include <plan_env/pipeline_trace.h>
 
 #define logit(x) (log((x) / (1 - (x))))
 
@@ -61,6 +64,9 @@ struct MappingParameters {
   double resolution_, resolution_inv_;
   double obstacles_inflation_z_up, obstacles_inflation_z_down;
   double double_cylinder_radius_, double_cylinder_offset_;
+  string footprint_model_;
+  double footprint_length_, footprint_width_, footprint_offset_x_, footprint_offset_y_;
+  double safety_clearance_, inflation_radius_xy_;
   bool map_sliding_en_;
   double map_sliding_thresh_;
   int map_sliding_thresh_vox_;
@@ -192,6 +198,13 @@ public:
   bool odomValid();
   void getRegion(Eigen::Vector3d& ori, Eigen::Vector3d& size);
   inline double getResolution();
+  std::uint64_t traceCloudSeq() const { return trace_map_cloud_seq_; }
+  std::uint64_t traceMapVersion() const { return trace_map_version_; }
+  double collisionRadius() const { return mp_.inflation_radius_xy_; }
+  double collisionOffset() const {
+    return mp_.footprint_model_ == "circumscribed_circle" ? 0.0 : mp_.double_cylinder_offset_;
+  }
+
   Eigen::Vector3d getOrigin();
   int getVoxelNum();
 
@@ -202,6 +215,9 @@ public:
 private:
   MappingParameters mp_;
   MappingData md_;
+  std::uint64_t trace_cloud_seq_{0}, trace_pending_cloud_seq_{0};
+  std::uint64_t trace_map_cloud_seq_{0}, trace_map_version_{0};
+  long long trace_sensor_odom_stamp_ns_{0};
 
   // get depth image and sensor pose
   void depthPoseCallback(const sensor_msgs::msg::Image::ConstSharedPtr& img,
@@ -369,6 +385,17 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos) {
 }
 
 inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
+  if (mp_.footprint_model_ == "circumscribed_circle") {
+    // The entire planar envelope must fit in the local map. A centre-only
+    // lookup would otherwise silently treat an unobserved outer arc as free.
+    const double r = mp_.inflation_radius_xy_;
+    if (!isInMap(Eigen::Vector3d(pos + Eigen::Vector3d(r, 0, 0))) ||
+        !isInMap(Eigen::Vector3d(pos - Eigen::Vector3d(r, 0, 0))) ||
+        !isInMap(Eigen::Vector3d(pos + Eigen::Vector3d(0, r, 0))) ||
+        !isInMap(Eigen::Vector3d(pos - Eigen::Vector3d(0, r, 0)))) return -1;
+    return getInflateOccupancyFromBuffer(pos, md_.occupancy_buffer_inflate_);
+  }
+
   Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
   Eigen::Vector3d front = pos + mp_.double_cylinder_offset_ * heading;
   Eigen::Vector3d rear = pos - mp_.double_cylinder_offset_ * heading;
