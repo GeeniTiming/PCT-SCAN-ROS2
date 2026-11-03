@@ -48,6 +48,15 @@ namespace scan_planner
     };
 
     bool arrival_hold_{false}, local_target_blocked_{false};
+    bool allow_occupied_goal_{false};      // keep requested goal even if its footprint is occupied
+    // Start-escape: relaxed inflation while leaving a cluttered start area,
+    // then nominal (strict) inflation for the whole navigation phase.
+    bool start_escape_enabled_{false}, start_escape_active_{false};
+    double start_escape_radius_{0.11};
+    double start_escape_distance_{0.8};
+    double nominal_inflation_radius_{0.33};
+    Eigen::Vector3d start_escape_origin_{Eigen::Vector3d::Zero()};
+    double last_live_detour_stamp_{0.0};   // throttle SCAN-A* live detour attempts
     ArrivalPolicy arrival_policy_;
     std::chrono::steady_clock::time_point last_odom_received_{};
     std::chrono::steady_clock::time_point next_retry_{};

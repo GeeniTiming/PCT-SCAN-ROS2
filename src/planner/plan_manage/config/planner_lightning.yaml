@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # M20Pro + Lightning-LM 专用 SCAN planner 配置（真机单文件启动，无需 -r 重映射）
 #
 # 启动方式（见 运行日志.txt / M20Pro运行手册.md §5）：
@@ -58,7 +58,7 @@ scan_planner_node:
     # 【重要】局部规划窗口长度(m)：沿全局参考路径向前取这么长作为一条局部 B 样条。
     # 这就是“scan planner 只规划一段”的长度。调大可减少段数与窗口边界抖动，
     # 但单次优化更慢、局部绕障能力下降。建议 3.5~6.0
-    fsm.planning_horizon: 3.0
+    fsm.planning_horizon: 1.5
     # 紧急时间(s)：碰撞点距当前时间小于该值直接急停，否则先尝试重规划
     fsm.emergency_time: 1.0
     # 【重要】定位真正丢失的判定时长(s)：odom 超过该时长才算“丢失”并急停。
@@ -71,9 +71,18 @@ scan_planner_node:
     fsm.max_replan_fail_count: 1000
     # 【终点朝向】总开关：true 时到达终点前边转边走，终点朝向由 /pct_path 末帧
     # orientation（RViz 2D Goal Pose / Goal 旋转环）决定。false=纯切向，原行为
-    fsm.enable_goal_yaw: true
+    fsm.enable_goal_yaw: false
     # Must match the controller finish_yaw_tolerance (rad).
     fsm.goal_yaw_tolerance: 0.10
+    # 目标点被实时障碍膨胀圈覆盖时，是否保留操作者设定的目标（true=不自动回退，
+    # 机器人尽量开到最近处；false=C 会把目标截断到全局轨迹上最近的无碰撞点）
+    fsm.allow_occupied_goal: true
+    # 【起步逃逸】起点环境拥挤时，规划器需要放宽膨胀半径才能起步；机器人离开
+    # 起点 start_escape_distance 米后自动恢复严格 safety_clearance（运行段始终
+    # 保持 30 cm 避障指标）。start_escape_radius=0.11 只作用于起步阶段。
+    fsm.start_escape_enabled: true
+    fsm.start_escape_radius: 0.11
+    fsm.start_escape_distance: 0.8
     # 转弯参考角速度(rad/s)：铺开距离 S_blend = v*|Δψ|/rate 的参考值
     fsm.terminal_yaw_rate: 0.7
     # 最小铺开距离(m)：S_blend 下限，太小的目标朝向也会留出这段距离转向
@@ -118,6 +127,17 @@ scan_planner_node:
     # 机身高度(m)：参考路径每点 z += body_height（reference_path_utils.h:117）。
     # 需与 ground_height 配合，让参考路径落在可通行高度
     grid_map.body_height: 0.2
+    # ---- 2026-10-29 实机避障测试：带朝向的真实机身矩形包络 ----
+    # 按 yaw 检查 0.82x0.43 机身轮廓 + 精确 safety_clearance，不再用外接圆/胶囊的
+    # 各向同性膨胀；缝宽需求 = 0.43 + 2*clearance = 1.03 m（clearance=0.30）
+    grid_map.footprint_model: oriented_rectangle
+    grid_map.footprint_length: 0.82
+    grid_map.footprint_width: 0.43
+    grid_map.footprint_offset_x: 0.03
+    grid_map.footprint_offset_y: 0.02
+    grid_map.safety_clearance: 0.50
+    # 栅格离散化保护量(m)：障碍膨胀 = safety_clearance + 该值
+    grid_map.rectangle_margin: 0.03
     # 障碍物向上/向下膨胀(m)：把障碍在 z 方向加厚，避免被从上方或下方钻过
     grid_map.obstacles_inflation_z_up: 0.1
     grid_map.obstacles_inflation_z_down: 0.1
@@ -127,6 +147,10 @@ scan_planner_node:
     grid_map.sliding_map_frame_id: sliding_map
     # 地图 z 下界(m)：即 map_origin_ 的 z。地面被误判为障碍时优先查这里
     grid_map.ground_height: 0.0
+    # 自身点过滤：传感器周围该半径内、且相对传感器高度低于 z_max 的点不入图，
+    # 避免机器狗自己的腿/身体被当成障碍（胶囊膨胀会因此把起点判成占据）
+    grid_map.self_filter_radius: 0.85
+    grid_map.self_filter_z_max: 0.30
     # 传感器类型：lidar / depth。真机用 lidar
     grid_map.sensor_type: lidar
     # 输入点云是否已在世界(map)系：false=点云在传感器系，需按位姿变换
@@ -193,13 +217,13 @@ scan_planner_node:
     # 平滑项权重(lambda1)：越大轨迹越平滑、越保守
     optimization.lambda_smooth: 1.0
     # 碰撞项权重(lambda2)：越大越远离障碍。安全优先可适当调大
-    optimization.lambda_collision: 1.0
+    optimization.lambda_collision: 2.5
     # 可行性项权重(lambda3)：越大越严格满足速度/加速度上限
     optimization.lambda_feasibility: 0.1
     # 贴合项权重(lambda4)：越大越贴合初始引导路径/局部目标
     optimization.lambda_fitness: 1.0
     # 期望安全间距(m)：轨迹与障碍的期望余量(cps_.clearance)
-    optimization.dist0: 0.2
+    optimization.dist0: 0.36
     # 【重要】优化器速度上限(m/s)：应 ≤ manager.max_vel
     optimization.max_vel: 0.30
     # 【重要】优化器加速度上限(m/s^2)：应 ≤ manager.max_acc
@@ -217,3 +241,7 @@ scan_planner_node:
     # fsm.reference_path_simplify_tolerance: 0.0
     # 参考路径最小采样间距(m)（默认 0.5）：PCT 路径点的最小间隔
     # fsm.reference_path_min_distance: 0.5
+
+
+
+

@@ -60,6 +60,10 @@ namespace scan_planner
     enable_goal_yaw_ = load_parameter<bool>(node_, "fsm.enable_goal_yaw", false);
     terminal_yaw_rate_ = load_parameter<double>(node_, "fsm.terminal_yaw_rate", 0.7);
     terminal_blend_min_dist_ = load_parameter<double>(node_, "fsm.terminal_blend_min_dist", 0.5);
+    allow_occupied_goal_ = load_parameter<bool>(node_, "fsm.allow_occupied_goal", false);
+    start_escape_enabled_ = load_parameter<bool>(node_, "fsm.start_escape_enabled", false);
+    start_escape_radius_ = load_parameter<double>(node_, "fsm.start_escape_radius", 0.11);
+    start_escape_distance_ = load_parameter<double>(node_, "fsm.start_escape_distance", 0.8);
 
     std::string odom_topic = load_parameter<std::string>(node_, "fsm.odom_topic", "body_pose");
     std::string frozen_topic =
@@ -339,6 +343,18 @@ namespace scan_planner
     if (final_occ <= 0)
       return true;
 
+    // Keep the operator-requested goal even when the final footprint would
+    // overlap an inflated obstacle: SCAN will drive as close as safely
+    // possible (live-obstacle detour / local target logic) instead of silently
+    // truncating the goal to a point further away from the requested location.
+    if (allow_occupied_goal_)
+    {
+      RCLCPP_WARN(node_->get_logger(),
+                  "Target [%.2f, %.2f, %.2f] is occupied, but fsm.allow_occupied_goal=true: keeping requested goal",
+                  end_pt_(0), end_pt_(1), end_pt_(2));
+      return true;
+    }
+
     for (int i = sample_num; i >= 0; --i)
     {
       const double t = duration * i / sample_num;
@@ -429,6 +445,47 @@ namespace scan_planner
       }
 
       RCLCPP_INFO(node_->get_logger(), "Reference path accepted");
+      // Start-escape: the environment at the start pose is often genuinely
+      // cluttered, so the planner may need a relaxed inflation radius to get
+      // going. It is restored to the nominal (strict) value once the robot has
+      // moved start_escape_distance_ away from the start pose, so the whole
+      // navigation phase keeps the normal 30 cm clearance guarantee.
+      if (start_escape_enabled_ && planner_manager_->grid_map_ && !start_escape_active_)
+      {
+        // Only relax when the start pose is genuinely inside the strict
+        // inflation zone; otherwise keep the strict 30 cm guarantee from the
+        // very first meter (avoid hugging obstacles near a clear start).
+        // Use the rectangle-aware check (with current heading) so the guard
+        // matches the same collision test that later rejects the replan.
+        const bool start_blocked =
+            planner_manager_->grid_map_->getInflateOccupancy(odom_pos_, getOdomYaw()) != 0;
+        if (start_blocked)
+        {
+          nominal_inflation_radius_ = planner_manager_->grid_map_->getInflationRadius();
+          start_escape_origin_ = odom_pos_;
+          start_escape_active_ = true;
+          planner_manager_->grid_map_->setInflationRadius(start_escape_radius_);
+          RCLCPP_WARN(node_->get_logger(),
+              "[StartEscape] start blocked, relaxed inflation %.3f m at (%0.2f, %0.2f); will restore %.3f m after %.2f m",
+              start_escape_radius_, odom_pos_(0), odom_pos_(1),
+              nominal_inflation_radius_, start_escape_distance_);
+        }
+        else
+        {
+          RCLCPP_INFO(node_->get_logger(),
+              "[StartEscape] start pose clear; keeping strict inflation %.3f m",
+              planner_manager_->grid_map_->getInflationRadius());
+        }
+      }
+      else if (start_escape_active_ && planner_manager_->grid_map_)
+      {
+        // A new reference path arrived while still in the escape phase: keep
+        // the already-recorded nominal radius, only re-arm the origin.
+        start_escape_origin_ = odom_pos_;
+        RCLCPP_WARN(node_->get_logger(),
+            "[StartEscape] new path while escaping; still restoring %.3f m after %.2f m",
+            nominal_inflation_radius_, start_escape_distance_);
+      }
     }
     else
     {
@@ -441,6 +498,21 @@ namespace scan_planner
     odom_pos_(0) = msg->pose.pose.position.x;
     odom_pos_(1) = msg->pose.pose.position.y;
     odom_pos_(2) = msg->pose.pose.position.z;
+
+    // Leave the cluttered start area -> restore the strict nominal inflation so
+    // the normal navigation phase keeps the full clearance requirement.
+    if (start_escape_active_ && planner_manager_->grid_map_)
+    {
+      const double moved = (odom_pos_ - start_escape_origin_).head<2>().norm();
+      if (moved >= start_escape_distance_)
+      {
+        start_escape_active_ = false;
+        planner_manager_->grid_map_->setInflationRadius(nominal_inflation_radius_);
+        RCLCPP_WARN(node_->get_logger(),
+            "[StartEscape] moved %.2f m from start: restored strict inflation %.3f m",
+            moved, nominal_inflation_radius_);
+      }
+    }
 
     if (navi_mode_ == NAVI_MODE::MANUAL_TARGET && !rviz_height_ready_)
     {
@@ -861,12 +933,26 @@ namespace scan_planner
           changeFSMExecState(GEN_NEW_TRAJ, "FSM");
         else if (enable_fail_safe_ && need_hover_stop_ && odom_vel_.norm() < 0.1)
         {
-          RCLCPP_INFO(node_->get_logger(),
-                      "Exiting EMERGENCY_STOP; switching to WAIT_TARGET for a new target");
           need_hover_stop_ = false;
-          have_target_ = false;
-          trigger_ = false;
-          changeFSMExecState(WAIT_TARGET, "EMERGENCY_EXIT");
+          flag_escape_emergency_ = false;
+          if (have_target_)
+          {
+            // Live obstacle temporarily blocked the path (e.g. a person stepped
+            // in). Keep the goal so navigation resumes automatically once the
+            // path clears, instead of dropping the target and waiting forever.
+            RCLCPP_WARN(node_->get_logger(),
+                        "Exiting EMERGENCY_STOP; keeping target and retrying replan");
+            trigger_ = true;
+            changeFSMExecState(WAIT_TARGET, "EMERGENCY_RESUME");
+          }
+          else
+          {
+            RCLCPP_INFO(node_->get_logger(),
+                        "Exiting EMERGENCY_STOP; switching to WAIT_TARGET for a new target");
+            have_target_ = false;
+            trigger_ = false;
+            changeFSMExecState(WAIT_TARGET, "EMERGENCY_EXIT");
+          }
         }
       }
 
@@ -1033,14 +1119,106 @@ namespace scan_planner
   bool SCANReplanFSM::callReboundReplan(bool flag_use_poly_init, bool flag_randomPolyTraj)
   {
 
+    // Replan-escape: if the robot itself has drifted inside the strict
+    // inflation band (e.g. it followed the static reference path too close to
+    // a live obstacle), every plan fails because A* treats the start as
+    // occupied and the robot can never back out. Relax the inflation for the
+    // escape phase; odometryCallback restores the strict value once the robot
+    // has moved start_escape_distance_ away.
+    if (start_escape_enabled_ && !start_escape_active_ && planner_manager_->grid_map_ &&
+        planner_manager_->grid_map_->getInflateOccupancy(odom_pos_, getOdomYaw()) != 0)
+    {
+      nominal_inflation_radius_ = planner_manager_->grid_map_->getInflationRadius();
+      start_escape_origin_ = odom_pos_;
+      start_escape_active_ = true;
+      local_target_blocked_ = false;
+      planner_manager_->grid_map_->setInflationRadius(start_escape_radius_);
+      RCLCPP_WARN(node_->get_logger(),
+          "[ReplanEscape] boxed-in start: relaxed inflation %.3f -> %.3f m",
+          nominal_inflation_radius_, start_escape_radius_);
+    }
     if (local_target_blocked_) return false;
     getLocalTarget();
-    if ((start_pt_ - local_target_pt_).norm() < 0.20) {
-      // A nearby LOCAL target does not imply arrival at the global destination.
-      local_target_blocked_ = true;
-      RCLCPP_WARN(node_->get_logger(),
-          "Local target too close while global goal is not reached; stopping instead of retrying");
-      return false;
+
+    // Live-obstacle fallback: PCT plans its global path on the static map, so
+    // a temporarily placed obstacle can block the reference path. When the
+    // local target is in collision, has collapsed, OR the straight segment to
+    // it crosses the live inflated map, let SCAN's own A* search a detour
+    // waypoint; only if that fails fall back to a straight goal-directed probe.
+    const double local_target_dist = (start_pt_ - local_target_pt_).norm();
+    const double local_target_yaw =
+        std::atan2(local_target_pt_(1) - start_pt_(1), local_target_pt_(0) - start_pt_(0));
+    const bool local_target_collision =
+        planner_manager_->grid_map_->getInflateOccupancy(local_target_pt_, local_target_yaw) != 0;
+
+    bool segment_blocked = false;
+    if (local_target_dist > 0.05) {
+      for (double s = 0.10; s <= local_target_dist; s += 0.10) {
+        const Eigen::Vector3d sample =
+            start_pt_ + (local_target_pt_ - start_pt_) * (s / local_target_dist);
+        if (planner_manager_->grid_map_->getInflateOccupancy(sample, local_target_yaw) != 0) {
+          segment_blocked = true;
+          break;
+        }
+      }
+    }
+    RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+        "[LiveAvoid] start=(%.2f, %.2f) goal=(%.2f, %.2f) ref_target=(%.2f, %.2f) dist=%.2f ref_collision=%d seg_blocked=%d",
+        start_pt_(0), start_pt_(1), end_pt_(0), end_pt_(1),
+        local_target_pt_(0), local_target_pt_(1), local_target_dist,
+        static_cast<int>(local_target_collision), static_cast<int>(segment_blocked));
+
+    if (local_target_dist < 0.20 || local_target_collision || segment_blocked) {
+      Eigen::Vector3d detour_pt;
+      bool detour_ok = false;
+      const double now_s = node_->now().seconds();
+      if (now_s - last_live_detour_stamp_ > 0.4) {
+        last_live_detour_stamp_ = now_s;
+        detour_ok = planner_manager_->planLiveDetourTarget(
+            start_pt_, end_pt_, detour_pt, 0.9, 1.8);
+        if (detour_ok) {
+          RCLCPP_WARN(node_->get_logger(),
+              "[LiveAvoid] A* detour target=(%.2f, %.2f) (ref target blocked)",
+              detour_pt(0), detour_pt(1));
+        } else {
+          RCLCPP_WARN(node_->get_logger(),
+              "[LiveAvoid] A* detour search failed; trying straight goal probe");
+        }
+      }
+      if (detour_ok) {
+        local_target_pt_ = detour_pt;
+        local_target_vel_ = Eigen::Vector3d::Zero();
+        have_new_target_ = true;
+      } else {
+        // Straight-line probe toward the global goal as a cheap fallback.
+        Eigen::Vector3d to_goal = end_pt_ - start_pt_;
+        const double goal_dist = to_goal.head<2>().norm();
+        bool fallback_ok = false;
+        if (goal_dist > 0.35) {
+          Eigen::Vector3d dir = to_goal / to_goal.norm();
+          double step = std::min(1.20, goal_dist);
+          while (step > 0.30) {
+            Eigen::Vector3d cand = start_pt_ + dir * step;
+            const double cand_yaw = std::atan2(dir.y(), dir.x());
+            if (planner_manager_->grid_map_->getInflateOccupancy(cand, cand_yaw) == 0) {
+              local_target_pt_ = cand;
+              local_target_vel_ = Eigen::Vector3d::Zero();
+              have_new_target_ = true;
+              fallback_ok = true;
+              break;
+            }
+            step -= 0.10;
+          }
+        }
+        if (!fallback_ok) {
+          local_target_blocked_ = true;
+          RCLCPP_WARN(node_->get_logger(),
+              "Live obstacle blocks reference target and no detour found; stopping");
+          return false;
+        }
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+            "Reference path blocked by live obstacle; using goal-directed fallback target");
+      }
     }
 
     const auto trace_map = planner_manager_->grid_map_;
@@ -1053,6 +1231,39 @@ namespace scan_planner
         ",\"success\":" + std::to_string(plan_success) +
         ",\"map_version\":" + std::to_string(trace_map->traceMapVersion()));
     have_new_target_ = false;
+
+    // Second chance: if planning on the reference/detour target failed, try a
+    // fresh SCAN-A* detour target once (a live obstacle may have just appeared).
+    if (!plan_success)
+    {
+      Eigen::Vector3d detour_pt;
+      const double now_s = node_->now().seconds();
+      if (now_s - last_live_detour_stamp_ > 0.4 &&
+          planner_manager_->planLiveDetourTarget(start_pt_, end_pt_, detour_pt, 0.9, 1.8))
+      {
+        last_live_detour_stamp_ = now_s;
+        local_target_pt_ = detour_pt;
+        local_target_vel_ = Eigen::Vector3d::Zero();
+        have_new_target_ = true;
+        plan_success = planner_manager_->reboundReplan(
+            start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_,
+            true, flag_randomPolyTraj);
+        have_new_target_ = false;
+        RCLCPP_WARN(node_->get_logger(),
+            "Replan failed on current target; retried with SCAN A* detour target (%.2f, %.2f) success=%d",
+            detour_pt(0), detour_pt(1), static_cast<int>(plan_success));
+        cout << "final_plan_success(detour_retry)=" << plan_success << endl;
+      }
+    }
+
+    if (!plan_success) {
+      RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 500,
+          "[PlanFail] start=(%.2f, %.2f) target=(%.2f, %.2f) goal=(%.2f, %.2f) "
+          "start_to_target=%.2f m target_to_goal=%.2f m",
+          start_pt_(0), start_pt_(1), local_target_pt_(0), local_target_pt_(1),
+          end_pt_(0), end_pt_(1), (start_pt_ - local_target_pt_).norm(),
+          (local_target_pt_ - end_pt_).norm());
+    }
 
     cout << "final_plan_success=" << plan_success << endl;
 

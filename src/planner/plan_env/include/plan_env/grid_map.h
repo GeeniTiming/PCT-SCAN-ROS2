@@ -64,6 +64,8 @@ struct MappingParameters {
   double resolution_, resolution_inv_;
   double obstacles_inflation_z_up, obstacles_inflation_z_down;
   double double_cylinder_radius_, double_cylinder_offset_;
+  double three_circle_offset_;
+  double rectangle_margin_;
   string footprint_model_;
   double footprint_length_, footprint_width_, footprint_offset_x_, footprint_offset_y_;
   double safety_clearance_, inflation_radius_xy_;
@@ -89,6 +91,7 @@ struct MappingParameters {
 
   /* visualization and computation time display */
   double vis_height_, ground_height_;
+  double self_filter_radius_, self_filter_z_max_;
   bool show_occ_time_;
 
   /* mapping sensor input */
@@ -176,6 +179,9 @@ public:
   inline int getOccupancy(Eigen::Vector3d pos);
   inline int getOccupancy(Eigen::Vector3i id);
   inline int getInflateOccupancy(Eigen::Vector3d pos, double yaw);
+  // Yaw-insensitive point check against the inflated buffer: used by the
+  // live-detour A* search where no real robot heading is available per node.
+  inline int getInflateOccupancyPointOnly(Eigen::Vector3d pos);
 
   inline void boundIndex(Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3i& id);
@@ -198,11 +204,20 @@ public:
   bool odomValid();
   void getRegion(Eigen::Vector3d& ori, Eigen::Vector3d& size);
   inline double getResolution();
+  // Runtime inflation-radius control (used by the FSM "start escape" mode:
+  // relaxed radius while the robot leaves a cluttered start area, then the
+  // nominal strict radius for normal navigation).
+  inline double getInflationRadius() const { return mp_.inflation_radius_xy_; }
+  void setInflationRadius(double radius);
+  void rebuildInflationBuffer();
   std::uint64_t traceCloudSeq() const { return trace_map_cloud_seq_; }
   std::uint64_t traceMapVersion() const { return trace_map_version_; }
   double collisionRadius() const { return mp_.inflation_radius_xy_; }
   double collisionOffset() const {
-    return mp_.footprint_model_ == "circumscribed_circle" ? 0.0 : mp_.double_cylinder_offset_;
+    if (mp_.footprint_model_ == "circumscribed_circle") return 0.0;
+    if (mp_.footprint_model_ == "oriented_rectangle") return 0.0;
+    if (mp_.footprint_model_ == "three_circle") return mp_.three_circle_offset_;
+    return mp_.double_cylinder_offset_;
   }
 
   Eigen::Vector3d getOrigin();
@@ -384,6 +399,10 @@ inline int GridMap::getOccupancy(Eigen::Vector3d pos) {
   return md_.occupancy_buffer_[toAddress(id)] > mp_.min_occupancy_log_ ? 1 : 0;
 }
 
+inline int GridMap::getInflateOccupancyPointOnly(Eigen::Vector3d pos) {
+  return getInflateOccupancyFromBuffer(pos, md_.occupancy_buffer_inflate_);
+}
+
 inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
   if (mp_.footprint_model_ == "circumscribed_circle") {
     // The entire planar envelope must fit in the local map. A centre-only
@@ -394,6 +413,58 @@ inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
         !isInMap(Eigen::Vector3d(pos + Eigen::Vector3d(0, r, 0))) ||
         !isInMap(Eigen::Vector3d(pos - Eigen::Vector3d(0, r, 0)))) return -1;
     return getInflateOccupancyFromBuffer(pos, md_.occupancy_buffer_inflate_);
+  }
+
+  if (mp_.footprint_model_ == "three_circle") {
+    // Body rectangle covered by three circles at x = cx-ox, cx, cx+ox and
+    // y = offset_y. Each circle radius already contains safety_clearance and
+    // the grid guard, so an inflated-map lookup per circle is enough.
+    const double r = mp_.inflation_radius_xy_;
+    const double ox = mp_.three_circle_offset_;
+    const double cx = mp_.footprint_offset_x_;
+    const double cy = mp_.footprint_offset_y_;
+    const double reach_x = std::max(std::abs(cx + ox), std::abs(cx - ox)) + r;
+    const double reach_y = std::abs(cy) + r;
+    if (!isInMap(Eigen::Vector3d(pos(0) + reach_x, pos(1), pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0) - reach_x, pos(1), pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0), pos(1) + reach_y, pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0), pos(1) - reach_y, pos(2)))) return -1;
+    const Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
+    const Eigen::Vector3d lateral(-std::sin(yaw), std::cos(yaw), 0.0);
+    const double xs[3] = {cx + ox, cx, cx - ox};
+    for (int i = 0; i < 3; ++i) {
+      const Eigen::Vector3d center = pos + xs[i] * heading + cy * lateral;
+      const int occ = getInflateOccupancyFromBuffer(center, md_.occupancy_buffer_inflate_);
+      if (occ != 0) return occ;
+    }
+    return 0;
+  }
+
+  if (mp_.footprint_model_ == "oriented_rectangle") {
+    // True body rectangle at the query yaw. Obstacles are inflated by
+    // safety_clearance + a small margin in the map, so checking the body
+    // outline against the inflated buffer enforces the required edge
+    // clearance without the isotropic over-inflation of the circle models.
+    const double hl = 0.5 * mp_.footprint_length_;
+    const double hw = 0.5 * mp_.footprint_width_;
+    const double ox = mp_.footprint_offset_x_;
+    const double oy = mp_.footprint_offset_y_;
+    const double reach = std::hypot(hl + std::abs(ox), hw + std::abs(oy));
+    if (!isInMap(Eigen::Vector3d(pos(0) + reach, pos(1), pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0) - reach, pos(1), pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0), pos(1) + reach, pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0), pos(1) - reach, pos(2)))) return -1;
+    const Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
+    const Eigen::Vector3d lateral(-std::sin(yaw), std::cos(yaw), 0.0);
+    // 4 corners + 4 edge midpoints + centre.
+    const double lx[9] = {ox + hl, ox - hl, ox + hl, ox - hl, ox + hl, ox - hl, ox, ox, ox};
+    const double ly[9] = {oy + hw, oy + hw, oy - hw, oy - hw, oy, oy, oy + hw, oy - hw, oy};
+    for (int i = 0; i < 9; ++i) {
+      const Eigen::Vector3d sample = pos + lx[i] * heading + ly[i] * lateral;
+      const int occ = getInflateOccupancyFromBuffer(sample, md_.occupancy_buffer_inflate_);
+      if (occ != 0) return occ;
+    }
+    return 0;
   }
 
   Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);

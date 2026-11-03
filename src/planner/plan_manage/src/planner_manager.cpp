@@ -4,6 +4,8 @@
 #include <plan_manage/trajectory_reuse_utils.h>
 #include <chrono>
 #include <thread>
+#include <algorithm>
+#include <cmath>
 
 namespace scan_planner
 {
@@ -72,12 +74,140 @@ namespace scan_planner
     bspline_optimizer_rebound_->setParam(node_);
     bspline_optimizer_rebound_->setEnvironment(grid_map_);
     bspline_optimizer_rebound_->a_star_.reset(new AStar);
-    bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(100, 100, 100));
+    bspline_optimizer_rebound_->a_star_->initGridMap(grid_map_, Eigen::Vector3i(200, 200, 100));
 
     visualization_ = vis;
   }
 
   // !SECTION
+
+  bool SCANPlannerManager::planLiveDetourTarget(const Eigen::Vector3d &start_pt,
+                                                const Eigen::Vector3d &goal_pt,
+                                                Eigen::Vector3d &detour_pt,
+                                                double lookahead_min,
+                                                double lookahead_max)
+  {
+    if (!bspline_optimizer_rebound_ || !bspline_optimizer_rebound_->a_star_ || !grid_map_)
+      return false;
+
+    Eigen::Vector3d delta = goal_pt - start_pt;
+    delta(2) = 0.0;
+    const double goal_dist = delta.head<2>().norm();
+    if (goal_dist < 1e-3)
+      return false;
+
+    // Clamp the search goal into the local A* pool range and retry with
+    // progressively shorter lookaheads if the far goal is unreachable.
+    // The point-only occupancy mode avoids the orientation-dependent rectangle
+    // check being applied with a synthetic heading inside the grid search.
+    auto a_star = bspline_optimizer_rebound_->a_star_;
+    a_star->setPointOnlyOccupancy(true);
+    std::vector<Eigen::Vector3d> path;
+    bool found_path = false;
+    for (double look = 2.5; look >= 0.9; look -= 0.4)
+    {
+      const Eigen::Vector3d search_goal =
+          start_pt + delta.normalized() * std::min(goal_dist, look);
+      const ASTAR_RET ret = a_star->AstarSearch(grid_map_->getResolution(), start_pt, search_goal);
+      if (ret == ASTAR_RET::SUCCESS)
+      {
+        path = a_star->getPath();
+        if (path.size() >= 2)
+        {
+          found_path = true;
+          break;
+        }
+      }
+    }
+    a_star->setPointOnlyOccupancy(false);
+    if (!found_path)
+    {
+      // Straight corridor to the goal is blocked (e.g. a person stepped in
+      // front). Search for a sideways step-aside target in a fan around the
+      // goal direction: full rectangle check on the candidate, A* reachability
+      // check with point-only occupancy, prefer the candidate that still makes
+      // progress toward the goal.
+      a_star->setPointOnlyOccupancy(true);
+      const Eigen::Vector2d goal_dir = delta.head<2>().normalized();
+      const double goal_yaw = std::atan2(goal_dir.y(), goal_dir.x());
+      const double radii[2] = {1.0, 1.45};
+      const double angles_deg[6] = {45.0, -45.0, 70.0, -70.0, 100.0, -100.0};
+      double best_score = -1e9;
+      Eigen::Vector3d best_cand = start_pt;
+      bool have_cand = false;
+      for (const double r : radii)
+      {
+        for (const double a_deg : angles_deg)
+        {
+          const double a = a_deg * M_PI / 180.0;
+          const Eigen::Vector3d cand =
+              start_pt + Eigen::Vector3d(std::cos(goal_yaw + a) * r,
+                                         std::sin(goal_yaw + a) * r, 0.0);
+          const double cand_yaw =
+              std::atan2(cand.y() - start_pt.y(), cand.x() - start_pt.x());
+          if (grid_map_->getInflateOccupancy(cand, cand_yaw) != 0)
+            continue;
+          const ASTAR_RET ret =
+              a_star->AstarSearch(grid_map_->getResolution(), start_pt, cand);
+          if (ret != ASTAR_RET::SUCCESS)
+            continue;
+          const double score = (cand - start_pt).head<2>().dot(goal_dir);
+          if (score > best_score)
+          {
+            best_score = score;
+            best_cand = cand;
+            have_cand = true;
+          }
+        }
+      }
+      a_star->setPointOnlyOccupancy(false);
+      if (have_cand)
+      {
+        detour_pt = best_cand;
+        return true;
+      }
+      return false;
+    }
+
+    // Prefer the farthest collision-free point inside the lookahead window so
+    // the next SCAN A* / B-spline plan has room to steer around the obstacle.
+    bool found = false;
+    Eigen::Vector3d best = start_pt;
+    for (const auto &pt : path)
+    {
+      const double d = (pt - start_pt).head<2>().norm();
+      if (d < lookahead_min)
+        continue;
+      if (d > lookahead_max)
+        break;
+      const double yaw = std::atan2(pt.y() - start_pt.y(), pt.x() - start_pt.x());
+      if (grid_map_->getInflateOccupancy(pt, yaw) != 0)
+        continue;
+      best = pt;
+      found = true;
+    }
+    if (!found)
+    {
+      // Fallback: nearest collision-free path point beyond 0.4 m.
+      for (const auto &pt : path)
+      {
+        const double d = (pt - start_pt).head<2>().norm();
+        if (d < 0.4)
+          continue;
+        const double yaw = std::atan2(pt.y() - start_pt.y(), pt.x() - start_pt.x());
+        if (grid_map_->getInflateOccupancy(pt, yaw) != 0)
+          continue;
+        best = pt;
+        found = true;
+        break;
+      }
+    }
+    if (!found)
+      return false;
+
+    detour_pt = best;
+    return true;
+  }
 
   // SECTION rebond replanning
 

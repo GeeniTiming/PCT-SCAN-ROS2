@@ -1,4 +1,4 @@
-# ============================================================================
+﻿# ============================================================================
 # M20Pro + Lightning-LM 专用控制器配置（单文件启动，无需 -r 重映射）
 #
 # 真机只用 closed_loop_controller；其余 open_loop_controller /
@@ -52,7 +52,7 @@ closed_loop_controller:
     kd_yaw: 0.0
     # 【重要】body 系前进速度上限(m/s)：应 ≤ 规划速度(manager/optimization.max_vel)。
     # 控制器硬钳制，参考比它快就会持续追不上/过冲
-    max_vx: 0.30
+    max_vx: 0.10
     # body 系横向速度上限(m/s)：四足/底盘需支持真侧移，否则仅作补偿用
     max_vy: 0.05
     # 【重要】偏航角速度上限(rad/s)：代码内还会再硬钳到 1.0。
@@ -100,7 +100,7 @@ go2_kinematic_sim:
     init_z: 0.3
     init_yaw: 0.0
     # 仿真器对 /cmd_vel 的速度钳制(m/s, m/s, rad/s)；yaw 会再硬钳到 1.0
-    max_vx: 0.75
+    max_vx: 0.10
     max_vy: 0.35
     max_vyaw: 1.0
     # 指令超时(s)：超过该时间没收到 /cmd_vel 就按零速处理（安全停车）
@@ -136,3 +136,5 @@ go2_gait_publisher:
     hip_swing: 0.08
     thigh_swing: 0.32
     calf_swing: 0.42
+
+

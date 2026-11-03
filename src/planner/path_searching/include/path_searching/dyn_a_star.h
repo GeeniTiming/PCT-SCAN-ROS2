@@ -68,11 +68,22 @@ private:
 
 	inline int checkOccupancy(const Eigen::Vector3d &pos, const double yaw) { return grid_map_->getInflateOccupancy(pos, yaw); }
 
+	// Yaw-insensitive occupancy check used by the live-detour search: the
+	// oriented-rectangle footprint is orientation dependent, but the A* grid
+	// search does not track a real heading, so a point check against the
+	// inflated buffer is the correct conservative test here.
+	inline int checkOccupancyAny(const Eigen::Vector3d &pos, const double yaw)
+	{
+		return point_only_occupancy_ ? grid_map_->getInflateOccupancyPointOnly(pos)
+		                             : checkOccupancy(pos, yaw);
+	}
+
 	std::vector<GridNodePtr> retrievePath(GridNodePtr current);
 
 	double step_size_, inv_step_size_;
 	Eigen::Vector3d center_;
 	Eigen::Vector3i CENTER_IDX_, POOL_SIZE_;
+	bool point_only_occupancy_{false};
 	const double tie_breaker_ = 1.0 + 1.0 / 10000;
 
 	std::vector<GridNodePtr> gridPath_;
@@ -89,6 +100,8 @@ public:
 	~AStar();
 
 	void initGridMap(GridMap::Ptr occ_map, const Eigen::Vector3i pool_size);
+
+	void setPointOnlyOccupancy(bool enabled) { point_only_occupancy_ = enabled; }
 
 	ASTAR_RET AstarSearch(const double step_size, Eigen::Vector3d start_pt, Eigen::Vector3d end_pt);
 

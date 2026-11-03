@@ -47,6 +47,36 @@ void GridMap::initMap(rclcpp::Node *node)
         "[Footprint] circumscribed_circle length=%.3f width=%.3f offset=(%.3f,%.3f) clearance=%.3f grid_guard=%.3f inflation_radius=%.3f",
         mp_.footprint_length_, mp_.footprint_width_, mp_.footprint_offset_x_,
         mp_.footprint_offset_y_, mp_.safety_clearance_, std::sqrt(2.0)*mp_.resolution_, mp_.inflation_radius_xy_);
+  } else if (mp_.footprint_model_ == "three_circle") {
+    // Three-circle capsule: the body rectangle (plus its lateral offset) is
+    // covered by three equal circles along the body x axis. The inflated map
+    // radius is the circle radius, so side clearance stays at safety_clearance
+    // while the gap needed to pass between obstacles shrinks from 2*R_circle
+    // of the circumscribed model to 2*R_capsule.
+    const double guard = std::sqrt(2.0) * mp_.resolution_;
+    mp_.inflation_radius_xy_ = 0.5 * mp_.footprint_width_ +
+                               std::abs(mp_.footprint_offset_y_) +
+                               mp_.safety_clearance_ + guard;
+    mp_.three_circle_offset_ = std::max(
+        0.0, 0.5 * (mp_.footprint_length_ - mp_.footprint_width_));
+    RCLCPP_INFO(node_->get_logger(),
+        "[Footprint] three_circle length=%.3f width=%.3f offset=(%.3f,%.3f) clearance=%.3f grid_guard=%.3f inflation_radius=%.3f circle_offset=%.3f",
+        mp_.footprint_length_, mp_.footprint_width_, mp_.footprint_offset_x_,
+        mp_.footprint_offset_y_, mp_.safety_clearance_, guard,
+        mp_.inflation_radius_xy_, mp_.three_circle_offset_);
+  } else if (mp_.footprint_model_ == "oriented_rectangle") {
+    // Oriented-rectangle footprint: check the true body outline at the query
+    // yaw against obstacles inflated by exactly the required clearance plus a
+    // small discretisation margin. This matches the acceptance metric (body
+    // edge to obstacle surface) instead of the conservative circumscribed
+    // circle, so a 1.03 m + margin corridor can be passed with 0.30 m clear.
+    load_parameter(node_, "grid_map.rectangle_margin", mp_.rectangle_margin_, 0.03);
+    mp_.inflation_radius_xy_ = mp_.safety_clearance_ + mp_.rectangle_margin_;
+    RCLCPP_INFO(node_->get_logger(),
+        "[Footprint] oriented_rectangle length=%.3f width=%.3f offset=(%.3f,%.3f) clearance=%.3f margin=%.3f inflation_radius=%.3f",
+        mp_.footprint_length_, mp_.footprint_width_, mp_.footprint_offset_x_,
+        mp_.footprint_offset_y_, mp_.safety_clearance_, mp_.rectangle_margin_,
+        mp_.inflation_radius_xy_);
   } else if (mp_.footprint_model_ == "legacy_double_cylinder") {
     mp_.inflation_radius_xy_ = std::max(0.0, mp_.double_cylinder_radius_);
   } else {
@@ -80,6 +110,8 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.frame_id", mp_.frame_id_, string("world"));
   load_parameter(node_, "grid_map.sliding_map_frame_id", mp_.sliding_map_frame_id_, string("sliding_map"));
   load_parameter(node_, "grid_map.ground_height", mp_.ground_height_, 0.0);
+  load_parameter(node_, "grid_map.self_filter_radius", mp_.self_filter_radius_, 0.62);
+  load_parameter(node_, "grid_map.self_filter_z_max", mp_.self_filter_z_max_, 0.30);
 
   load_parameter(node_, "grid_map.sensor_type", mp_.sensor_type_, string("lidar"));
   load_parameter(node_, "grid_map.cloud_is_world", mp_.cloud_is_world_, true);
@@ -249,6 +281,35 @@ void GridMap::rebuildInflationOffsets()
       for (int z = -inf_step_z_down; z <= inf_step_z_up; ++z)
         md_.inflate_offsets_.push_back(Eigen::Vector3i(x, y, z));
     }
+}
+
+void GridMap::rebuildInflationBuffer()
+{
+  std::fill(md_.occupancy_buffer_inflate_.begin(), md_.occupancy_buffer_inflate_.end(), 0);
+  std::fill(md_.occupancy_buffer_inflate_cnt_.begin(), md_.occupancy_buffer_inflate_cnt_.end(), 0);
+  const int n_cells = static_cast<int>(md_.occupancy_buffer_.size());
+  for (int addr = 0; addr < n_cells; ++addr) {
+    if (md_.occupancy_buffer_[addr] > mp_.min_occupancy_log_) {
+      Eigen::Vector3i id_g;
+      hashIdToGlobalIndex(addr, id_g);
+      updateInflation(id_g, 1);
+    }
+  }
+}
+
+void GridMap::setInflationRadius(double radius)
+{
+  const double clamped = std::max(radius, 2.0 * mp_.resolution_);
+  if (std::abs(clamped - mp_.inflation_radius_xy_) < 1e-3) {
+    mp_.inflation_radius_xy_ = clamped;
+    return;
+  }
+  RCLCPP_WARN(node_->get_logger(),
+      "[Inflation] runtime radius change %.3f -> %.3f m (start-escape mode)",
+      mp_.inflation_radius_xy_, clamped);
+  mp_.inflation_radius_xy_ = clamped;
+  rebuildInflationOffsets();
+  rebuildInflationBuffer();
 }
 
 void GridMap::resetAllMapData()
@@ -957,6 +1018,12 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
     }
     const Eigen::Vector3d devi = pt_world - ray_pos;
     const double ray_length = devi.norm();
+    // Drop returns from the robot's own body/legs: low points inside the
+    // footprint around the sensor would otherwise be inflated by the capsule
+    // radius and mark the start pose as occupied.
+    if (std::hypot(devi(0), devi(1)) < mp_.self_filter_radius_ &&
+        devi(2) < mp_.self_filter_z_max_)
+      continue;
     const bool in_local_range =
         fabs(devi(0)) <= mp_.local_update_range_(0) && fabs(devi(1)) <= mp_.local_update_range_(1) &&
         fabs(devi(2)) <= mp_.local_update_range_(2);

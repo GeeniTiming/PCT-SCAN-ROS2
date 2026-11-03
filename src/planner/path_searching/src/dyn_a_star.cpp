@@ -1,4 +1,4 @@
-#include "path_searching/dyn_a_star.h"
+﻿#include "path_searching/dyn_a_star.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -102,7 +102,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
     const double path_yaw = std::atan2(start_to_end(1), start_to_end(0));
     start_to_end.normalize();
 
-    int occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
+    int occ = checkOccupancyAny(Index2Coord(start_idx), path_yaw);
     if (occ)
     {
         //ROS_WARN("Start point is insdide an obstacle.");
@@ -112,7 +112,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
             if (!Coord2Index(start_pt, start_idx))
                 return false;
 
-            occ = checkOccupancy(Index2Coord(start_idx), path_yaw);
+            occ = checkOccupancyAny(Index2Coord(start_idx), path_yaw);
             if (occ == -1)
             {
                 RCLCPP_WARN(rclcpp::get_logger("path_searching"), "[Astar] Start point outside the map region.");
@@ -121,7 +121,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
         } while (occ);
     }
 
-    occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
+    occ = checkOccupancyAny(Index2Coord(end_idx), path_yaw);
     if (occ)
     {
         //ROS_WARN("End point is insdide an obstacle.");
@@ -131,7 +131,7 @@ bool AStar::ConvertToIndexAndAdjustStartEndPoints(Vector3d start_pt, Vector3d en
             if (!Coord2Index(end_pt, end_idx))
                 return false;
 
-            occ = checkOccupancy(Index2Coord(end_idx), path_yaw);
+            occ = checkOccupancyAny(Index2Coord(end_idx), path_yaw);
             if (occ == -1)
             {
                 RCLCPP_WARN(rclcpp::get_logger("path_searching"), "[Astar] End point outside the map region.");
@@ -253,7 +253,7 @@ ASTAR_RET AStar::AstarSearch(const double step_size, Vector3d start_pt, Vector3d
                 neighborPtr->rounds = rounds_;
 
                 const double neighbor_yaw = std::atan2(static_cast<double>(dy), static_cast<double>(dx));
-                if (checkOccupancy(Index2Coord(neighborPtr->index), neighbor_yaw))
+                if (checkOccupancyAny(Index2Coord(neighborPtr->index), neighbor_yaw))
                 {
                     continue;
                 }
@@ -307,3 +307,4 @@ vector<Vector3d> AStar::getPath()
     reverse(path.begin(), path.end());
     return path;
 }
+

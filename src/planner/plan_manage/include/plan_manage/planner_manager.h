@@ -36,6 +36,16 @@ namespace scan_planner
 
     void initPlanModules(rclcpp::Node *node, PlanningVisualization::Ptr vis = nullptr);
 
+    // Live-obstacle detour support: run SCAN's own A* on the current live
+    // inflated map toward goal and return a nearby collision-free waypoint.
+    // Used when the PCT reference path (planned on the static map) is blocked
+    // by a temporarily placed obstacle.
+    bool planLiveDetourTarget(const Eigen::Vector3d &start_pt,
+                              const Eigen::Vector3d &goal_pt,
+                              Eigen::Vector3d &detour_pt,
+                              double lookahead_min = 0.6,
+                              double lookahead_max = 1.5);
+
     PlanParameters pp_;
     LocalTrajData local_data_;
     GlobalTrajData global_data_;
