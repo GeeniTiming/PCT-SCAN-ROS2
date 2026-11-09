@@ -112,6 +112,7 @@ void GridMap::initMap(rclcpp::Node *node)
   load_parameter(node_, "grid_map.ground_height", mp_.ground_height_, 0.0);
   load_parameter(node_, "grid_map.self_filter_radius", mp_.self_filter_radius_, 0.62);
   load_parameter(node_, "grid_map.self_filter_z_max", mp_.self_filter_z_max_, 0.30);
+  load_parameter(node_, "grid_map.clear_self_radius", mp_.clear_self_radius_, 0.0);
 
   load_parameter(node_, "grid_map.sensor_type", mp_.sensor_type_, string("lidar"));
   load_parameter(node_, "grid_map.cloud_is_world", mp_.cloud_is_world_, true);
@@ -398,6 +399,28 @@ void GridMap::resetCellByAddress(int addr)
   md_.count_hit_and_miss_[addr] = 0;
   md_.flag_rayend_[addr] = -1;
   md_.flag_traverse_[addr] = -1;
+}
+
+void GridMap::clearSelfRegion()
+{
+  if (mp_.clear_self_radius_ <= 1e-3 || !md_.has_ray_pose_)
+    return;
+  const double r = mp_.clear_self_radius_;
+  const double z_span = 0.6;
+  Eigen::Vector3i id_min, id_max;
+  posToIndex(md_.ray_pos_ - Eigen::Vector3d(r, r, z_span), id_min);
+  posToIndex(md_.ray_pos_ + Eigen::Vector3d(r, r, z_span), id_max);
+  for (int x = id_min(0); x <= id_max(0); ++x)
+    for (int y = id_min(1); y <= id_max(1); ++y)
+      for (int z = id_min(2); z <= id_max(2); ++z)
+      {
+        Eigen::Vector3d pos;
+        indexToPos(Eigen::Vector3i(x, y, z), pos);
+        if ((pos.head<2>() - md_.ray_pos_.head<2>()).norm() > r)
+          continue;
+        const int addr = toAddress(x, y, z);
+        resetCellByAddress(addr);
+      }
 }
 
 void GridMap::resetCellByAddressForSliding(int addr, const std::vector<char>& clear_mask)
@@ -1040,6 +1063,12 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
 
   if (md_.proj_points_cnt == 0)
     return;
+
+  // Erase historical occupied cells under/around the robot body. Self-filtered
+  // returns mean the map never receives clearing rays there, so those cells
+  // would otherwise stay occupied forever and make the planner treat its own
+  // start pose as "inside an obstacle".
+  clearSelfRegion();
 
   md_.use_cloud_update_ = true;
   md_.occ_need_update_ = true;

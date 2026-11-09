@@ -101,6 +101,11 @@ namespace scan_planner
     // The point-only occupancy mode avoids the orientation-dependent rectangle
     // check being applied with a synthetic heading inside the grid search.
     auto a_star = bspline_optimizer_rebound_->a_star_;
+    std::cout << "[DetourDiag] start=(" << start_pt.x() << "," << start_pt.y()
+              << ") goal=(" << goal_pt.x() << "," << goal_pt.y()
+              << ") start_pt_occ=" << grid_map_->getInflateOccupancyPointOnly(start_pt)
+              << " look_min=" << lookahead_min << " look_max=" << lookahead_max << std::endl;
+
     a_star->setPointOnlyOccupancy(true);
     std::vector<Eigen::Vector3d> path;
     bool found_path = false;
@@ -119,15 +124,13 @@ namespace scan_planner
         }
       }
     }
-    a_star->setPointOnlyOccupancy(false);
+
     if (!found_path)
     {
       // Straight corridor to the goal is blocked (e.g. a person stepped in
-      // front). Search for a sideways step-aside target in a fan around the
-      // goal direction: full rectangle check on the candidate, A* reachability
-      // check with point-only occupancy, prefer the candidate that still makes
-      // progress toward the goal.
-      a_star->setPointOnlyOccupancy(true);
+      // front). Search sideways step-aside targets; a candidate is accepted
+      // only if the A* route to it is fully traversable by the body rectangle
+      // (curved routes are fine), and the one making most progress wins.
       const Eigen::Vector2d goal_dir = delta.head<2>().normalized();
       const double goal_yaw = std::atan2(goal_dir.y(), goal_dir.x());
       const double radii[2] = {1.0, 1.45};
@@ -135,10 +138,12 @@ namespace scan_planner
       double best_score = -1e9;
       Eigen::Vector3d best_cand = start_pt;
       bool have_cand = false;
+      int n_cand = 0, n_astar_ok = 0, n_body_ok = 0;
       for (const double r : radii)
       {
         for (const double a_deg : angles_deg)
         {
+          ++n_cand;
           const double a = a_deg * M_PI / 180.0;
           const Eigen::Vector3d cand =
               start_pt + Eigen::Vector3d(std::cos(goal_yaw + a) * r,
@@ -151,6 +156,11 @@ namespace scan_planner
               a_star->AstarSearch(grid_map_->getResolution(), start_pt, cand);
           if (ret != ASTAR_RET::SUCCESS)
             continue;
+          ++n_astar_ok;
+          const std::vector<Eigen::Vector3d> cand_path = a_star->getPath();
+          if (cand_path.empty())
+            continue;
+          ++n_body_ok;
           const double score = (cand - start_pt).head<2>().dot(goal_dir);
           if (score > best_score)
           {
@@ -161,6 +171,9 @@ namespace scan_planner
         }
       }
       a_star->setPointOnlyOccupancy(false);
+      std::cout << "[DetourDiag] straight_path=FAIL fan_cand=" << n_cand
+                << " astar_ok=" << n_astar_ok << " body_ok=" << n_body_ok
+                << " accepted=" << (have_cand ? 1 : 0) << std::endl;
       if (have_cand)
       {
         detour_pt = best_cand;
@@ -169,43 +182,41 @@ namespace scan_planner
       return false;
     }
 
-    // Prefer the farthest collision-free point inside the lookahead window so
-    // the next SCAN A* / B-spline plan has room to steer around the obstacle.
+    // Prefer the farthest point inside the lookahead window. The A* route is
+    // point-clear of the inflated obstacles; the drive speed is low, so the
+    // body may curve through the free corridor around a person instead of the
+    // robot stopping outright.
     bool found = false;
     Eigen::Vector3d best = start_pt;
-    for (const auto &pt : path)
+    for (int i = 0; i < static_cast<int>(path.size()); ++i)
     {
-      const double d = (pt - start_pt).head<2>().norm();
+      const double d = (path[i] - start_pt).head<2>().norm();
       if (d < lookahead_min)
         continue;
       if (d > lookahead_max)
         break;
-      const double yaw = std::atan2(pt.y() - start_pt.y(), pt.x() - start_pt.x());
-      if (grid_map_->getInflateOccupancy(pt, yaw) != 0)
-        continue;
-      best = pt;
+      best = path[i];
       found = true;
     }
     if (!found)
     {
-      // Fallback: nearest collision-free path point beyond 0.4 m.
-      for (const auto &pt : path)
+      for (int i = 0; i < static_cast<int>(path.size()); ++i)
       {
-        const double d = (pt - start_pt).head<2>().norm();
+        const double d = (path[i] - start_pt).head<2>().norm();
         if (d < 0.4)
           continue;
-        const double yaw = std::atan2(pt.y() - start_pt.y(), pt.x() - start_pt.x());
-        if (grid_map_->getInflateOccupancy(pt, yaw) != 0)
-          continue;
-        best = pt;
+        best = path[i];
         found = true;
         break;
       }
     }
+    a_star->setPointOnlyOccupancy(false);
     if (!found)
       return false;
 
     detour_pt = best;
+    std::cout << "[DetourDiag] straight_path=OK size=" << path.size()
+              << " chosen_dist=" << (best - start_pt).head<2>().norm() << std::endl;
     return true;
   }
 

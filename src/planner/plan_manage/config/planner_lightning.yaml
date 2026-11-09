@@ -81,8 +81,8 @@ scan_planner_node:
     # 起点 start_escape_distance 米后自动恢复严格 safety_clearance（运行段始终
     # 保持 30 cm 避障指标）。start_escape_radius=0.11 只作用于起步阶段。
     fsm.start_escape_enabled: true
-    fsm.start_escape_radius: 0.11
-    fsm.start_escape_distance: 0.8
+    fsm.start_escape_radius: 0.15
+    fsm.start_escape_distance: 0.30
     # 转弯参考角速度(rad/s)：铺开距离 S_blend = v*|Δψ|/rate 的参考值
     fsm.terminal_yaw_rate: 0.7
     # 最小铺开距离(m)：S_blend 下限，太小的目标朝向也会留出这段距离转向
@@ -135,7 +135,7 @@ scan_planner_node:
     grid_map.footprint_width: 0.43
     grid_map.footprint_offset_x: 0.03
     grid_map.footprint_offset_y: 0.02
-    grid_map.safety_clearance: 0.50
+    grid_map.safety_clearance: 0.30
     # 栅格离散化保护量(m)：障碍膨胀 = safety_clearance + 该值
     grid_map.rectangle_margin: 0.03
     # 障碍物向上/向下膨胀(m)：把障碍在 z 方向加厚，避免被从上方或下方钻过
@@ -149,8 +149,9 @@ scan_planner_node:
     grid_map.ground_height: 0.0
     # 自身点过滤：传感器周围该半径内、且相对传感器高度低于 z_max 的点不入图，
     # 避免机器狗自己的腿/身体被当成障碍（胶囊膨胀会因此把起点判成占据）
-    grid_map.self_filter_radius: 0.85
+    grid_map.self_filter_radius: 0.62
     grid_map.self_filter_z_max: 0.30
+    grid_map.clear_self_radius: 0.0
     # 传感器类型：lidar / depth。真机用 lidar
     grid_map.sensor_type: lidar
     # 输入点云是否已在世界(map)系：false=点云在传感器系，需按位姿变换
@@ -223,7 +224,7 @@ scan_planner_node:
     # 贴合项权重(lambda4)：越大越贴合初始引导路径/局部目标
     optimization.lambda_fitness: 1.0
     # 期望安全间距(m)：轨迹与障碍的期望余量(cps_.clearance)
-    optimization.dist0: 0.36
+    optimization.dist0: 0.30
     # 【重要】优化器速度上限(m/s)：应 ≤ manager.max_vel
     optimization.max_vel: 0.30
     # 【重要】优化器加速度上限(m/s^2)：应 ≤ manager.max_acc

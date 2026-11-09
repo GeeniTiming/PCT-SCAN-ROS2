@@ -92,6 +92,7 @@ struct MappingParameters {
   /* visualization and computation time display */
   double vis_height_, ground_height_;
   double self_filter_radius_, self_filter_z_max_;
+  double clear_self_radius_;  // cells within this radius of the sensor are cleared each cloud frame
   bool show_occ_time_;
 
   /* mapping sensor input */
@@ -257,6 +258,7 @@ private:
   int setCacheOccupancy(Eigen::Vector3d pos, int occ);
   Eigen::Vector3d closetPointInMap(const Eigen::Vector3d& pt, const Eigen::Vector3d& ray_pos);
   void updateSlidingMap(const Eigen::Vector3d& center);
+  void clearSelfRegion();
   void updateMapBoundaryFromIndex();
   void resetAllMapData();
   void resetCellByAddress(int addr);
