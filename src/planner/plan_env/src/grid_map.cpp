@@ -1041,11 +1041,35 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
     }
     const Eigen::Vector3d devi = pt_world - ray_pos;
     const double ray_length = devi.norm();
-    // Drop returns from the robot's own body/legs: low points inside the
-    // footprint around the sensor would otherwise be inflated by the capsule
-    // radius and mark the start pose as occupied.
-    if (std::hypot(devi(0), devi(1)) < mp_.self_filter_radius_ &&
-        devi(2) < mp_.self_filter_z_max_)
+    // Drop returns from the robot's own body/legs. When the rectangle footprint
+    // model is active, filter by the body rectangle (plus a small margin)
+    // instead of a 0.62 m circle: a foot standing 0.5 m in front of the robot is
+    // outside the body and must stay visible, otherwise the planner cannot see
+    // a person that is close but not touching the hull.
+    bool self_point = false;
+    if (mp_.footprint_model_ == "oriented_rectangle")
+    {
+      const double qw = md_.ray_q_.w();
+      const double qx = md_.ray_q_.x();
+      const double qy = md_.ray_q_.y();
+      const double qz = md_.ray_q_.z();
+      const double yaw = std::atan2(2.0 * (qw * qz + qx * qy),
+                                    1.0 - 2.0 * (qy * qy + qz * qz));
+      const double c = std::cos(yaw), s = std::sin(yaw);
+      const double bx = c * devi(0) + s * devi(1);
+      const double by = -s * devi(0) + c * devi(1);
+      const double half_len = 0.5 * mp_.footprint_length_ + 0.08;
+      const double half_wid = 0.5 * mp_.footprint_width_ + 0.10;
+      const bool inside_body = std::abs(bx) < half_len && std::abs(by) < half_wid;
+      // Very close points are always own legs, whatever the heading estimate.
+      const bool inside_leg_circle = std::hypot(devi(0), devi(1)) < 0.30;
+      self_point = inside_body || inside_leg_circle;
+    }
+    else
+    {
+      self_point = std::hypot(devi(0), devi(1)) < mp_.self_filter_radius_;
+    }
+    if (self_point && devi(2) < mp_.self_filter_z_max_)
       continue;
     const bool in_local_range =
         fabs(devi(0)) <= mp_.local_update_range_(0) && fabs(devi(1)) <= mp_.local_update_range_(1) &&

@@ -1175,7 +1175,8 @@ namespace scan_planner
       if (now_s - last_live_detour_stamp_ > 0.4) {
         last_live_detour_stamp_ = now_s;
         detour_ok = planner_manager_->planLiveDetourTarget(
-            start_pt_, end_pt_, detour_pt, 0.9, 1.8);
+            start_pt_, end_pt_, detour_pt, 0.9, 1.8,
+            local_target_collision || segment_blocked);
         if (detour_ok) {
           RCLCPP_WARN(node_->get_logger(),
               "[LiveAvoid] A* detour target=(%.2f, %.2f) (ref target blocked)",
@@ -1239,7 +1240,8 @@ namespace scan_planner
       Eigen::Vector3d detour_pt;
       const double now_s = node_->now().seconds();
       if (now_s - last_live_detour_stamp_ > 0.4 &&
-          planner_manager_->planLiveDetourTarget(start_pt_, end_pt_, detour_pt, 0.9, 1.8))
+          planner_manager_->planLiveDetourTarget(start_pt_, end_pt_, detour_pt, 0.9, 1.8,
+                                                 local_target_collision || segment_blocked))
       {
         last_live_detour_stamp_ = now_s;
         local_target_pt_ = detour_pt;

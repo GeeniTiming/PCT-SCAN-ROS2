@@ -71,7 +71,7 @@ scan_planner_node:
     fsm.max_replan_fail_count: 1000
     # 【终点朝向】总开关：true 时到达终点前边转边走，终点朝向由 /pct_path 末帧
     # orientation（RViz 2D Goal Pose / Goal 旋转环）决定。false=纯切向，原行为
-    fsm.enable_goal_yaw: false
+    fsm.enable_goal_yaw: true
     # Must match the controller finish_yaw_tolerance (rad).
     fsm.goal_yaw_tolerance: 0.10
     # 目标点被实时障碍膨胀圈覆盖时，是否保留操作者设定的目标（true=不自动回退，

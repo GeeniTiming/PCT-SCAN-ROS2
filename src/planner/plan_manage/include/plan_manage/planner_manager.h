@@ -44,7 +44,8 @@ namespace scan_planner
                               const Eigen::Vector3d &goal_pt,
                               Eigen::Vector3d &detour_pt,
                               double lookahead_min = 0.6,
-                              double lookahead_max = 1.5);
+                              double lookahead_max = 1.5,
+                              bool prefer_lateral = false);
 
     PlanParameters pp_;
     LocalTrajData local_data_;
@@ -59,6 +60,11 @@ namespace scan_planner
     BsplineOptimizer::Ptr bspline_optimizer_rebound_;
 
     int continuous_failures_count_{0};
+
+    // Lateral detour side lock: commit to one steering side for a few seconds
+    // so the step-aside target cannot flip left/right every replan cycle.
+    double last_lateral_time_{-1.0e9};
+    int last_lateral_sign_{0};
 
     void updateTrajInfo(const UniformBspline &position_traj, const rclcpp::Time time_now);
     bool checkDynamicFeasibility(UniformBspline position_traj);

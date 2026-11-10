@@ -85,7 +85,8 @@ namespace scan_planner
                                                 const Eigen::Vector3d &goal_pt,
                                                 Eigen::Vector3d &detour_pt,
                                                 double lookahead_min,
-                                                double lookahead_max)
+                                                double lookahead_max,
+                                                bool prefer_lateral)
   {
     if (!bspline_optimizer_rebound_ || !bspline_optimizer_rebound_->a_star_ || !grid_map_)
       return false;
@@ -95,6 +96,112 @@ namespace scan_planner
     const double goal_dist = delta.head<2>().norm();
     if (goal_dist < 1e-3)
       return false;
+
+    // Live obstacle (person) detected on the reference path: do not drive
+    // toward it first, because by the time the robot is close its front is
+    // already inside the obstacle inflation and every trajectory start check
+    // fails. Step sideways early instead, then re-plan toward the goal.
+    if (prefer_lateral)
+    {
+      const Eigen::Vector2d goal_dir = delta.head<2>().normalized();
+      const double goal_yaw = std::atan2(goal_dir.y(), goal_dir.x());
+      const double angles_deg[6] = {70.0, -70.0, 90.0, -90.0, 110.0, -110.0};
+      const double radii[2] = {1.3, 1.0};
+      const Eigen::Vector2d lat_dir(-goal_dir.y(), goal_dir.x());
+      const double now_s = std::chrono::duration<double>(
+          std::chrono::steady_clock::now().time_since_epoch()).count();
+      const int locked_sign =
+          (now_s - last_lateral_time_ < 4.0) ? last_lateral_sign_ : 0;
+      auto a_star_l = bspline_optimizer_rebound_->a_star_;
+      a_star_l->setPointOnlyOccupancy(true);
+      double best_score = -1e9;
+      Eigen::Vector3d best_cand = start_pt;
+      bool have = false;
+      int best_lat_sign = 0;
+      int ncand = 0, nok = 0;
+      for (const double r : radii)
+      {
+        for (const double a_deg : angles_deg)
+        {
+          ++ncand;
+          const double a = a_deg * M_PI / 180.0;
+          const Eigen::Vector3d cand =
+              start_pt + Eigen::Vector3d(std::cos(goal_yaw + a) * r,
+                                         std::sin(goal_yaw + a) * r, 0.0);
+          const double cand_yaw =
+              std::atan2(cand.y() - start_pt.y(), cand.x() - start_pt.x());
+          if (grid_map_->getInflateOccupancy(cand, cand_yaw) != 0)
+            continue;
+          // Extra safety ring: every sample 0.30 m around the step-aside point
+          // must be clear too. Sparse returns from a person's legs would
+          // otherwise leave a nearly invisible gap that a wheel can graze, and
+          // a graze latches the base into a protective stop that ignores all
+          // velocity commands for the rest of the run.
+          bool ring_ok = true;
+          for (int k = 0; k < 12; ++k)
+          {
+            const double ang = k * M_PI / 6.0;
+            const Eigen::Vector3d around =
+                cand + Eigen::Vector3d(std::cos(ang) * 0.30, std::sin(ang) * 0.30, 0.0);
+            if (grid_map_->getInflateOccupancyPointOnly(around) != 0)
+            {
+              ring_ok = false;
+              break;
+            }
+          }
+          if (!ring_ok)
+            continue;
+          // The middle of the step-aside move must also keep a margin: a point
+          // that is only reachable by grazing the person is rejected.
+          {
+            const Eigen::Vector3d mid = 0.5 * (start_pt + cand);
+            bool mid_ok = true;
+            for (int k = 0; k < 8; ++k)
+            {
+              const double ang = k * M_PI / 4.0;
+              const Eigen::Vector3d around =
+                  mid + Eigen::Vector3d(std::cos(ang) * 0.20, std::sin(ang) * 0.20, 0.0);
+              if (grid_map_->getInflateOccupancyPointOnly(around) != 0)
+              {
+                mid_ok = false;
+                break;
+              }
+            }
+            if (!mid_ok)
+              continue;
+          }
+          const ASTAR_RET ret =
+              a_star_l->AstarSearch(grid_map_->getResolution(), start_pt, cand);
+          if (ret != ASTAR_RET::SUCCESS)
+            continue;
+          ++nok;
+          const double lat_comp = (cand - start_pt).head<2>().dot(lat_dir);
+          if (locked_sign != 0 && lat_comp * locked_sign < 0.15)
+            continue;
+          const double lateral = std::fabs(lat_comp);
+          const double progress = (cand - start_pt).head<2>().dot(goal_dir);
+          const double score = lateral + 0.4 * progress;
+          if (score > best_score)
+          {
+            best_score = score;
+            best_cand = cand;
+            best_lat_sign = (lat_comp >= 0.0) ? 1 : -1;
+            have = true;
+          }
+        }
+      }
+      a_star_l->setPointOnlyOccupancy(false);
+      std::cout << "[DetourDiag] lateral_step=" << (have ? "OK" : "FAIL")
+                << " cand=" << ncand << " astar_ok=" << nok
+                << " locked_sign=" << locked_sign << std::endl;
+      if (have)
+      {
+        last_lateral_time_ = now_s;
+        last_lateral_sign_ = best_lat_sign;
+        detour_pt = best_cand;
+        return true;
+      }
+    }
 
     // Clamp the search goal into the local A* pool range and retry with
     // progressively shorter lookaheads if the far goal is unreachable.
@@ -182,21 +289,30 @@ namespace scan_planner
       return false;
     }
 
-    // Prefer the farthest point inside the lookahead window. The A* route is
-    // point-clear of the inflated obstacles; the drive speed is low, so the
-    // body may curve through the free corridor around a person instead of the
-    // robot stopping outright.
+    // Pick a mid-range point on the A* route (about 0.75 m ahead) instead of
+    // the farthest one: a far "detour target" usually lands on/behind the
+    // blocking obstacle, so the B-spline terminal check rejects it and the
+    // robot stops. A nearby waypoint lets the tracker execute the curved
+    // detour in several short steps.
     bool found = false;
     Eigen::Vector3d best = start_pt;
+    double best_err = 1e9;
     for (int i = 0; i < static_cast<int>(path.size()); ++i)
     {
       const double d = (path[i] - start_pt).head<2>().norm();
-      if (d < lookahead_min)
-        continue;
       if (d > lookahead_max)
         break;
-      best = path[i];
-      found = true;
+      if (d < 0.45)
+        continue;
+      if (grid_map_->getInflateOccupancyPointOnly(path[i]) != 0)
+        continue;
+      const double err = std::fabs(d - 0.75);
+      if (err < best_err)
+      {
+        best_err = err;
+        best = path[i];
+        found = true;
+      }
     }
     if (!found)
     {
@@ -204,6 +320,8 @@ namespace scan_planner
       {
         const double d = (path[i] - start_pt).head<2>().norm();
         if (d < 0.4)
+          continue;
+        if (grid_map_->getInflateOccupancyPointOnly(path[i]) != 0)
           continue;
         best = path[i];
         found = true;
