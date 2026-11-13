@@ -64,6 +64,8 @@ namespace scan_planner
     start_escape_enabled_ = load_parameter<bool>(node_, "fsm.start_escape_enabled", false);
     start_escape_radius_ = load_parameter<double>(node_, "fsm.start_escape_radius", 0.11);
     start_escape_distance_ = load_parameter<double>(node_, "fsm.start_escape_distance", 0.8);
+  near_hold_enter_ = load_parameter<double>(node_, "fsm.near_hold_enter", 0.55);
+  near_hold_exit_ = load_parameter<double>(node_, "fsm.near_hold_exit", 0.75);
 
     std::string odom_topic = load_parameter<std::string>(node_, "fsm.odom_topic", "body_pose");
     std::string frozen_topic =
@@ -119,7 +121,7 @@ namespace scan_planner
           std::bind(&SCANReplanFSM::rvizGoalCallback, this, std::placeholders::_1));
     else if (navi_mode_ == NAVI_MODE::REFERENCE_PATH)
       path_sub_ = node_->create_subscription<nav_msgs::msg::Path>(
-          initial_path_topic, rclcpp::QoS(1).reliable().transient_local(),
+          initial_path_topic, rclcpp::QoS(1).reliable(),
           std::bind(&SCANReplanFSM::pathCallback, this, std::placeholders::_1));
     else if (navi_mode_ == NAVI_MODE::PRESET_TARGET)
       RCLCPP_INFO(node_->get_logger(), "Preset waypoint mode will start after the first odometry message");
@@ -899,6 +901,22 @@ namespace scan_planner
 
       if (t_cur > info->duration_ - 1e-2)
       {
+        // Trajectory time expired. If we are already close to the goal do not
+        // replan-and-drive-on (that is how the robot used to overshoot the goal
+        // and hit whatever was behind it): declare arrival and align here.
+        const double goal_dist_end = (end_pt_ - pos).head<2>().norm();
+        const bool align_heading = enable_goal_yaw_ && goal_yaw_valid_ &&
+            navi_mode_ == NAVI_MODE::REFERENCE_PATH;
+        if (goal_dist_end < 0.45) {
+          callEmergencyStop(pos, align_heading);
+          arrival_hold_ = true;
+          terminal_alignment_active_ = align_heading;
+          if (align_heading)
+            RCLCPP_INFO(node_->get_logger(),
+                "TERMINAL_ALIGN_START(time-expired): goal_dist=%.2f goal_yaw=%.3f rad",
+                goal_dist_end, goal_yaw_);
+          return;
+        }
         // Time expiry is not physical arrival. Preserve target and replan from odom.
         changeFSMExecState(REPLAN_TRAJ, "TIME_EXPIRED_NOT_ARRIVED");
         return;
@@ -1138,6 +1156,32 @@ namespace scan_planner
           nominal_inflation_radius_, start_escape_radius_);
     }
     if (local_target_blocked_) return false;
+
+    // Near-person guard: the self-filter box hides objects inside the body
+    // outline, so a person who walks right up to the robot can be invisible to
+    // the map until contact. When any live obstacle is already inside the
+    // close-range band, hold here (~hover stop) instead of driving on; resume
+    // only once the obstacle has moved out of the hysteresis band.
+    if (planner_manager_->grid_map_)
+    {
+      const double d_near = planner_manager_->grid_map_->getNearestObstacleDist(
+          odom_pos_, near_hold_exit_ + 0.05,
+          odom_pos_(2) - 0.42, odom_pos_(2) + 1.20,
+          getOdomYaw(), 0.78, 0.32);
+      if (d_near < near_hold_enter_)
+        near_hold_active_ = true;
+      else if (d_near > near_hold_exit_)
+        near_hold_active_ = false;
+      if (near_hold_active_)
+      {
+        RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+            "[NearGuard] nearest obstacle %.2f m from body centre; holding",
+            d_near);
+        local_target_blocked_ = true;
+        return false;
+      }
+    }
+
     getLocalTarget();
 
     // Live-obstacle fallback: PCT plans its global path on the static map, so

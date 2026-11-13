@@ -162,6 +162,10 @@ class PCTPlanner(Node):
             raise ValueError("clicked_point_mode must be one of: alternate, start, goal")
 
         self.path_pub = self.create_publisher(Path, self.path_topic, qos)
+        # Latched (transient_local) delivery to already-connected subscribers is
+        # unreliable with this FastDDS setup, so also publish a volatile live copy
+        # for consumers that were already running when the plan is produced.
+        self.path_live_pub = self.create_publisher(Path, self.path_topic + "_live", 10)
         self.start_point_pub = self.create_publisher(PointStamped, "/pct_planner/start_point", qos)
         self.goal_point_pub = self.create_publisher(PointStamped, "/pct_planner/goal_point", qos)
         self.waypoint_marker_pub = self.create_publisher(MarkerArray, "/pct_planner/waypoint_markers", qos)
@@ -289,7 +293,14 @@ class PCTPlanner(Node):
             )
             if delta_sq < self.odom_start_min_delta ** 2:
                 return
-        if self.set_start(world[0], world[1], world[2], plan=False, update_marker=True, quiet=True):
+        now_dbg = self.get_clock().now().nanoseconds / 1e9
+        ok_dbg = self.set_start(world[0], world[1], world[2], plan=False, update_marker=True, quiet=True)
+        if now_dbg - getattr(self, '_odom_dbg_last', 0.0) > 2.0:
+            self._odom_dbg_last = now_dbg
+            self.get_logger().info(
+                f"[OdomStart] odom=({world[0]:.2f},{world[1]:.2f},{world[2]:.2f}) snap_ok={ok_dbg} "
+                f"start_pose={None if self.start_pose is None else [round(float(v),2) for v in self.start_pose]}")
+        if ok_dbg:
             self._last_odom_start_world = world
         else:
             now = self.get_clock().now().nanoseconds / 1e9
@@ -429,6 +440,7 @@ class PCTPlanner(Node):
                 goal_yaw=goal_yaw,
             )
             self.path_pub.publish(path_msg)
+            self.path_live_pub.publish(path_msg)
             self.get_logger().info(
                 f"Trajectory with {len(path_msg.poses)} poses published on {self.path_topic}"
             )

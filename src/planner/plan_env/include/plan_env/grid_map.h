@@ -184,6 +184,43 @@ public:
   // live-detour A* search where no real robot heading is available per node.
   inline int getInflateOccupancyPointOnly(Eigen::Vector3d pos);
 
+  // Horizontal distance from pos to the nearest occupied (raw) cell whose
+  // height is inside [z_min, z_max]. Cells inside the body-frame "leg corridor"
+  // (|long| < long_ignore, |lat| < lat_ignore) are skipped: those are the
+  // robot's own paws/shins leaking past the self-filter, not people.
+  double getNearestObstacleDist(const Eigen::Vector3d &pos, double max_range,
+                                double z_min, double z_max, double yaw,
+                                double long_ignore, double lat_ignore) {
+    if (!isInMap(pos)) return max_range;
+    Eigen::Vector3i id_c;
+    posToIndex(pos, id_c);
+    const int r = static_cast<int>(std::ceil(max_range / mp_.resolution_)) + 1;
+    const double c = std::cos(yaw), s = std::sin(yaw);
+    double best = max_range;
+    for (int dx = -r; dx <= r; ++dx) {
+      for (int dy = -r; dy <= r; ++dy) {
+        const double h2 = std::pow(dx * mp_.resolution_, 2) + std::pow(dy * mp_.resolution_, 2);
+        if (h2 > (max_range + mp_.resolution_) * (max_range + mp_.resolution_)) continue;
+        for (int dz = -60; dz <= 60; ++dz) {
+          const Eigen::Vector3i id(id_c(0) + dx, id_c(1) + dy, id_c(2) + dz);
+          if (!isInMap(id)) continue;
+          const int addr = toAddress(id);
+          if (md_.occupancy_buffer_[addr] <= mp_.min_occupancy_log_) continue;
+          Eigen::Vector3d q;
+          indexToPos(id, q);
+          if (q(2) < z_min || q(2) > z_max) continue;
+          const double ex = q(0) - pos(0), ey = q(1) - pos(1);
+          const double bx = c * ex + s * ey;
+          const double by = -s * ex + c * ey;
+          if (std::abs(bx) < long_ignore && std::abs(by) < lat_ignore) continue;
+          const double d = std::hypot(ex, ey);
+          if (d < best) best = d;
+        }
+      }
+    }
+    return best;
+  }
+
   inline void boundIndex(Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3d& pos);

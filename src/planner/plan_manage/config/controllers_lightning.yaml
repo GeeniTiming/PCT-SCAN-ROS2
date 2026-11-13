@@ -52,12 +52,12 @@ closed_loop_controller:
     kd_yaw: 0.0
     # 【重要】body 系前进速度上限(m/s)：应 ≤ 规划速度(manager/optimization.max_vel)。
     # 控制器硬钳制，参考比它快就会持续追不上/过冲
-    max_vx: 0.12
+    max_vx: 0.08
     # body 系横向速度上限(m/s)：四足/底盘需支持真侧移，否则仅作补偿用
-    max_vy: 0.05
+    max_vy: 0.0
     # 【重要】偏航角速度上限(rad/s)：代码内还会再硬钳到 1.0。
     # 调小更稳但转向更慢；调大更灵活但易过冲摆动
-    max_vyaw: 0.40
+    max_vyaw: 0.25
     # 到点判定距离(m)：轨迹走完且位置误差小于该值才发零速停住
     finish_dist: 0.10
     # 【终点朝向】收尾转向容差(rad)：有 yaw 曲线时，位置到位但航向误差大于
@@ -100,9 +100,9 @@ go2_kinematic_sim:
     init_z: 0.3
     init_yaw: 0.0
     # 仿真器对 /cmd_vel 的速度钳制(m/s, m/s, rad/s)；yaw 会再硬钳到 1.0
-    max_vx: 0.12
-    max_vy: 0.35
-    max_vyaw: 1.0
+    max_vx: 0.08
+    max_vy: 0.0
+    max_vyaw: 0.25
     # 指令超时(s)：超过该时间没收到 /cmd_vel 就按零速处理（安全停车）
     cmd_timeout: 0.3
     # 仿真积分/发布频率(Hz)

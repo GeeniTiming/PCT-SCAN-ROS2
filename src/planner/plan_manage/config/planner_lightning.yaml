@@ -27,7 +27,7 @@ scan_planner_node:
     # 其 header.frame_id 必须等于 grid_map.frame_id（当前 map）
     fsm.odom_topic: /lightning/odom
     # 全局参考路径(nav_msgs/Path)，navi_mode=3 时订阅；由 PCT/bridge 发布
-    fsm.initial_path_topic: /pct_path
+    fsm.initial_path_topic: /pct_path_live
     # 局部轨迹输出(scan_planner_msgs/Bspline)，closed_loop_controller 订阅
     fsm.bspline_topic: /planning/bspline
     # 与控制器互传的“冻结”标志(std_msgs/Bool)：控制器原地转向时置 true，
@@ -83,6 +83,8 @@ scan_planner_node:
     fsm.start_escape_enabled: true
     fsm.start_escape_radius: 0.15
     fsm.start_escape_distance: 0.30
+    fsm.near_hold_enter: 0.25
+    fsm.near_hold_exit: 0.40
     # 转弯参考角速度(rad/s)：铺开距离 S_blend = v*|Δψ|/rate 的参考值
     fsm.terminal_yaw_rate: 0.7
     # 最小铺开距离(m)：S_blend 下限，太小的目标朝向也会留出这段距离转向

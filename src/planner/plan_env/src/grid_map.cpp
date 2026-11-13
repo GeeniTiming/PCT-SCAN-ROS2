@@ -1058,8 +1058,8 @@ void GridMap::cloudCallback(const sensor_msgs::msg::PointCloud2::ConstSharedPtr 
       const double c = std::cos(yaw), s = std::sin(yaw);
       const double bx = c * devi(0) + s * devi(1);
       const double by = -s * devi(0) + c * devi(1);
-      const double half_len = 0.5 * mp_.footprint_length_ + 0.08;
-      const double half_wid = 0.5 * mp_.footprint_width_ + 0.10;
+      const double half_len = 0.5 * mp_.footprint_length_ + 0.04;
+      const double half_wid = 0.5 * mp_.footprint_width_ + 0.06;
       const bool inside_body = std::abs(bx) < half_len && std::abs(by) < half_wid;
       // Very close points are always own legs, whatever the heading estimate.
       const bool inside_leg_circle = std::hypot(devi(0), devi(1)) < 0.30;

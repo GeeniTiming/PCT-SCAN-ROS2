@@ -56,6 +56,12 @@ namespace scan_planner
     double start_escape_distance_{0.8};
     double nominal_inflation_radius_{0.33};
     Eigen::Vector3d start_escape_origin_{Eigen::Vector3d::Zero()};
+    // Close-range near-person guard: the body-adjacent blind spot cannot see a
+    // foot inside the self-filter box, so when any live obstacle is already very
+    // close the robot holds instead of driving on. Hysteresis avoids chatter.
+    bool near_hold_active_{false};
+    double near_hold_enter_{0.55};
+    double near_hold_exit_{0.75};
     double last_live_detour_stamp_{0.0};   // throttle SCAN-A* live detour attempts
     ArrivalPolicy arrival_policy_;
     std::chrono::steady_clock::time_point last_odom_received_{};
