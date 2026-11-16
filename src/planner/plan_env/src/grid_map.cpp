@@ -1108,8 +1108,8 @@ void GridMap::publishMap()
   if (map_pub_->get_subscription_count() == 0)
     return;
 
-  pcl::PointXYZ pt;
-  pcl::PointCloud<pcl::PointXYZ> cloud;
+  pcl::PointXYZI pt;
+  pcl::PointCloud<pcl::PointXYZI> cloud;
 
   Eigen::Vector3i min_cut = mp_.map_bound_min_idx_;
   Eigen::Vector3i max_cut = mp_.map_bound_max_idx_;
@@ -1128,6 +1128,9 @@ void GridMap::publishMap()
         pt.x = pos(0);
         pt.y = pos(1);
         pt.z = pos(2);
+        // occupancy log-odds as intensity: RViz needs the intensity field to
+        // render this cloud reliably (and it gives a useful colour mapping).
+        pt.intensity = static_cast<float>(md_.occupancy_buffer_[toAddress(x, y, z)]);
         cloud.push_back(pt);
       }
 
@@ -1148,8 +1151,8 @@ void GridMap::publishMapInflate(bool all_info)
   if (map_inf_pub_->get_subscription_count() == 0)
     return;
 
-  pcl::PointXYZ pt;
-  pcl::PointCloud<pcl::PointXYZ> cloud;
+  pcl::PointXYZI pt;
+  pcl::PointCloud<pcl::PointXYZI> cloud;
 
   Eigen::Vector3i min_cut = mp_.map_bound_min_idx_;
   Eigen::Vector3i max_cut = mp_.map_bound_max_idx_;
@@ -1170,6 +1173,7 @@ void GridMap::publishMapInflate(bool all_info)
         pt.x = pos(0);
         pt.y = pos(1);
         pt.z = pos(2);
+        pt.intensity = static_cast<float>(pos(2));
         cloud.push_back(pt);
       }
 

@@ -146,6 +146,17 @@ namespace scan_planner
     bool isWaypointSequenceMode() const;
     bool adjustGlobalTargetIfOccupied();
     void getLocalTarget();
+    // Steer the local target to the centre of a narrow gap (aperture slightly
+    // wider than the body) so the optimizer passes through the middle instead
+    // of grazing one side.
+    void centerLocalTargetThroughGap(const Eigen::Vector3d &start,
+                                     const Eigen::Vector3d &target);
+    // When a narrow gap is detected ahead, keep the local target at its centre
+    // for a short time so the planner commits to passing through instead of
+    // detouring around the gap.
+    bool gap_lock_active_{false};
+    Eigen::Vector3d gap_lock_target_{Eigen::Vector3d::Zero()};
+    double gap_lock_stamp_{0.0};
     void finishProcess();
     void publishSelfInflationMarker();
     double getOdomYaw() const;

@@ -137,7 +137,7 @@ scan_planner_node:
     grid_map.footprint_width: 0.43
     grid_map.footprint_offset_x: 0.03
     grid_map.footprint_offset_y: 0.02
-    grid_map.safety_clearance: 0.30
+    grid_map.safety_clearance: 0.25
     # 栅格离散化保护量(m)：障碍膨胀 = safety_clearance + 该值
     grid_map.rectangle_margin: 0.03
     # 障碍物向上/向下膨胀(m)：把障碍在 z 方向加厚，避免被从上方或下方钻过

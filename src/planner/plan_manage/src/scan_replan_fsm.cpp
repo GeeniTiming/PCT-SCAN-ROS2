@@ -1184,6 +1184,23 @@ namespace scan_planner
 
     getLocalTarget();
 
+    // Gap lock: if a narrow gap was detected just ahead, keep aiming at its
+    // centre and do not take the live-obstacle detour branch (otherwise the
+    // planner prefers going around the gap when there is enough space).
+    if (gap_lock_active_)
+    {
+      const double gap_age = node_->now().seconds() - gap_lock_stamp_;
+      const double gap_dist = (gap_lock_target_ - odom_pos_).head<2>().norm();
+      if (gap_age > 4.0 || gap_dist > 1.6)
+      {
+        gap_lock_active_ = false;
+      }
+      else
+      {
+        local_target_pt_ = gap_lock_target_;
+      }
+    }
+
     // Live-obstacle fallback: PCT plans its global path on the static map, so
     // a temporarily placed obstacle can block the reference path. When the
     // local target is in collision, has collapsed, OR the straight segment to
@@ -1212,7 +1229,7 @@ namespace scan_planner
         local_target_pt_(0), local_target_pt_(1), local_target_dist,
         static_cast<int>(local_target_collision), static_cast<int>(segment_blocked));
 
-    if (local_target_dist < 0.20 || local_target_collision || segment_blocked) {
+    if (!gap_lock_active_ && (local_target_dist < 0.20 || local_target_collision || segment_blocked)) {
       Eigen::Vector3d detour_pt;
       bool detour_ok = false;
       const double now_s = node_->now().seconds();
@@ -1402,6 +1419,98 @@ namespace scan_planner
     return true;
   }
 
+  void SCANReplanFSM::centerLocalTargetThroughGap(const Eigen::Vector3d &start,
+                                                  const Eigen::Vector3d &target)
+  {
+    if (!planner_manager_ || !planner_manager_->grid_map_)
+      return;
+    // If the current local target is very close (short reference-path segment),
+    // look further along the direction to the final goal instead, otherwise the
+    // narrow gap ahead would never be inside the scan range.
+    Eigen::Vector3d aim = target;
+    if ((target - start).head<2>().norm() < 1.20)
+      aim = end_pt_;
+    const Eigen::Vector2d dir(aim(0) - start(0), aim(1) - start(1));
+    const double L = dir.norm();
+    if (L < 0.80)
+      return;
+    const Eigen::Vector2d u = dir / L;
+    const Eigen::Vector2d left(-u(1), u(0));
+    const double yaw = std::atan2(u(1), u(0));
+    const double step = 0.05;
+    const double half = 1.10;
+    const int n = static_cast<int>(std::round(2.0 * half / step)) + 1;
+    double best_w = 1e9, best_c = 0.0, best_d = 0.0;
+    for (double d = 0.60; d <= std::min(L, 1.90) + 1e-9; d += step)
+    {
+      bool in_free = false, found = false;
+      double run_start = 0.0, a = 0.0, b = 0.0;
+      for (int i = 0; i < n; ++i)
+      {
+        const double lat = -half + i * step;
+        const Eigen::Vector3d p(start(0) + u(0) * d + left(0) * lat,
+                                start(1) + u(1) * d + left(1) * lat,
+                                target(2));
+        const bool free = planner_manager_->grid_map_->getInflateOccupancy(p, yaw) == 0;
+        if (free)
+        {
+          if (!in_free)
+          {
+            in_free = true;
+            run_start = lat;
+          }
+        }
+        else if (in_free)
+        {
+          in_free = false;
+          const double run_end = lat - step;
+          if (run_start <= 0.0 && run_end >= 0.0)
+          {
+            a = run_start;
+            b = run_end;
+            found = true;
+          }
+        }
+      }
+      if (in_free)
+      {
+        if (run_start <= 0.0 && half >= 0.0)
+        {
+          a = run_start;
+          b = half;
+          found = true;
+        }
+      }
+      if (!found)
+        continue;
+      const double w = b - a;
+      if (w < 0.30 || w > 0.80)
+        continue;
+      if (w < best_w)
+      {
+        best_w = w;
+        best_c = 0.5 * (a + b);
+        best_d = d;
+      }
+    }
+    if (best_w > 0.80 || std::fabs(best_c) < 0.02 || std::fabs(best_c) > 0.60)
+      return;
+    Eigen::Vector3d gap_pt(start(0) + u(0) * best_d + left(0) * best_c,
+                           start(1) + u(1) * best_d + left(1) * best_c,
+                           target(2));
+    gap_pt(0) += u(0) * 0.15;
+    gap_pt(1) += u(1) * 0.15;
+    if ((gap_pt - target).head<2>().norm() < 0.02)
+      return;
+    local_target_pt_ = gap_pt;
+    gap_lock_active_ = true;
+    gap_lock_target_ = gap_pt;
+    gap_lock_stamp_ = node_->now().seconds();
+    RCLCPP_INFO_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
+        "[GapCenter] narrow gap w=%.2f m at %.2f m, lateral offset %+.2f m -> local target centred",
+        best_w, best_d, best_c);
+  }
+
   void SCANReplanFSM::getLocalTarget()
   {
     const double max_vel = planner_manager_->pp_.max_vel_;
@@ -1494,6 +1603,8 @@ namespace scan_planner
                              "Local target is in collision and no nearby free target was found");
       }
     }
+
+    centerLocalTargetThroughGap(odom_pos_, local_target_pt_);
 
     const double braking_distance = max_acc > 1e-6
         ? (max_vel * max_vel) / (2.0 * max_acc)
