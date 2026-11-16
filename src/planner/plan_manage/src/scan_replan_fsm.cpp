@@ -66,6 +66,15 @@ namespace scan_planner
     start_escape_distance_ = load_parameter<double>(node_, "fsm.start_escape_distance", 0.8);
   near_hold_enter_ = load_parameter<double>(node_, "fsm.near_hold_enter", 0.55);
   near_hold_exit_ = load_parameter<double>(node_, "fsm.near_hold_exit", 0.75);
+  near_long_ignore_ = load_parameter<double>(node_, "fsm.near_guard_long_ignore", 0.78);
+  near_lat_ignore_ = load_parameter<double>(node_, "fsm.near_guard_lat_ignore", 0.32);
+  near_forward_enter_ = load_parameter<double>(node_, "fsm.near_forward_enter", 0.50);
+  near_forward_long_ignore_ = load_parameter<double>(node_, "fsm.near_forward_long_ignore", 0.80);
+  near_forward_lat_ignore_ = load_parameter<double>(node_, "fsm.near_forward_lat_ignore", 0.45);
+  near_forward_exit_ = load_parameter<double>(node_, "fsm.near_forward_exit", 0.70);
+  near_forward_max_ = load_parameter<double>(node_, "fsm.near_forward_max", 1.30);
+  near_omni_enter_ = load_parameter<double>(node_, "fsm.near_omni_enter", 0.20);
+  near_omni_exit_ = load_parameter<double>(node_, "fsm.near_omni_exit", 0.30);
 
     std::string odom_topic = load_parameter<std::string>(node_, "fsm.odom_topic", "body_pose");
     std::string frozen_topic =
@@ -1164,19 +1173,26 @@ namespace scan_planner
     // only once the obstacle has moved out of the hysteresis band.
     if (planner_manager_->grid_map_)
     {
-      const double d_near = planner_manager_->grid_map_->getNearestObstacleDist(
-          odom_pos_, near_hold_exit_ + 0.05,
-          odom_pos_(2) - 0.42, odom_pos_(2) + 1.20,
-          getOdomYaw(), 0.78, 0.32);
-      if (d_near < near_hold_enter_)
+      const double z_lo = odom_pos_(2) - 0.42;
+      const double z_hi = odom_pos_(2) + 1.20;
+      // Forward corridor (|lateral| <= 0.35 m): keep >=0.50 m clearance from
+      // anything directly in the driving direction (dynamic-person indicator).
+      const double d_fwd = planner_manager_->grid_map_->getNearestObstacleEdgeDistInBox(
+          odom_pos_, z_lo, z_hi, getOdomYaw(), 0.30, near_forward_max_, 0.35,
+          near_forward_long_ignore_, near_forward_lat_ignore_);
+      // Omnidirectional floor: never let anything come closer than 0.20 m to the
+      // body edge from any side (side/rear contact protection).
+      const double d_all = planner_manager_->grid_map_->getNearestObstacleEdgeDist(
+          odom_pos_, 0.60, z_lo, z_hi, getOdomYaw(), near_long_ignore_, near_lat_ignore_);
+      if (d_fwd < near_forward_enter_ || d_all < near_omni_enter_)
         near_hold_active_ = true;
-      else if (d_near > near_hold_exit_)
+      else if (d_fwd > near_forward_exit_ && d_all > near_omni_exit_)
         near_hold_active_ = false;
       if (near_hold_active_)
       {
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
-            "[NearGuard] nearest obstacle %.2f m from body centre; holding",
-            d_near);
+            "[NearGuard] edge clearance: forward %.2f m (hold<%.2f), all-round %.2f m (hold<%.2f); holding",
+            d_fwd, near_forward_enter_, d_all, near_omni_enter_);
         local_target_blocked_ = true;
         return false;
       }
@@ -1316,6 +1332,35 @@ namespace scan_planner
             "Replan failed on current target; retried with SCAN A* detour target (%.2f, %.2f) success=%d",
             detour_pt(0), detour_pt(1), static_cast<int>(plan_success));
         cout << "final_plan_success(detour_retry)=" << plan_success << endl;
+      }
+    }
+
+    // Mid-run escape: if the robot squeezed into the strict inflation zone while
+    // passing a gate / wall, no trajectory can start from here. Relax inflation
+    // temporarily, retry once, and let the odometry callback restore the strict
+    // radius after the robot has moved start_escape_distance_ away.
+    if (!plan_success)
+      ++replan_fail_streak_;
+    else
+      replan_fail_streak_ = 0;
+
+    if (!plan_success && !start_escape_active_ && planner_manager_->grid_map_ &&
+        (replan_fail_streak_ >= 3 || planner_manager_->grid_map_->getInflateOccupancy(start_pt_, getOdomYaw()) != 0))
+    {
+      {
+        replan_fail_streak_ = 0;
+        nominal_inflation_radius_ = planner_manager_->grid_map_->getInflationRadius();
+        start_escape_origin_ = odom_pos_;
+        start_escape_active_ = true;
+        planner_manager_->grid_map_->setInflationRadius(start_escape_radius_);
+        plan_success = planner_manager_->reboundReplan(
+            start_pt_, start_vel_, start_acc_, local_target_pt_, local_target_vel_,
+            true, flag_randomPolyTraj);
+        have_new_target_ = false;
+        RCLCPP_WARN(node_->get_logger(),
+            "[StartEscape] replan blocked while start inside inflation -> relaxed %.3f m, retry success=%d",
+            start_escape_radius_, static_cast<int>(plan_success));
+        cout << "final_plan_success(escape_retry)=" << plan_success << endl;
       }
     }
 

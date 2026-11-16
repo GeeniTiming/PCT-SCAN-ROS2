@@ -54,6 +54,15 @@ namespace scan_planner
     bool start_escape_enabled_{false}, start_escape_active_{false};
     double start_escape_radius_{0.11};
     double start_escape_distance_{0.8};
+    double near_long_ignore_{0.78};
+    double near_forward_enter_{0.50};
+    double near_forward_long_ignore_{0.80};
+    double near_forward_lat_ignore_{0.45};
+    double near_forward_exit_{0.70};
+    double near_forward_max_{1.30};
+    double near_omni_enter_{0.20};
+    double near_omni_exit_{0.30};
+    double near_lat_ignore_{0.32};
     double nominal_inflation_radius_{0.33};
     Eigen::Vector3d start_escape_origin_{Eigen::Vector3d::Zero()};
     // Close-range near-person guard: the body-adjacent blind spot cannot see a
@@ -104,6 +113,7 @@ namespace scan_planner
     FSM_EXEC_STATE exec_state_;
     int continuously_called_times_{0};
     int replan_fail_count_{0};
+    int replan_fail_streak_{0};
     int max_replan_fail_count_{1000};
     rclcpp::Time last_freeze_update_time_;
 

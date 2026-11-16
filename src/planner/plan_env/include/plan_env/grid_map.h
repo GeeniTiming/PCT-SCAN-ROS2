@@ -221,6 +221,69 @@ public:
     return best;
   }
 
+  // Edge distance (from the oriented-rectangle footprint) to the nearest
+  // occupied cell inside the height window. Body-frame cells inside the own-leg
+  // corridor are skipped. Returns 1e9 when nothing is found.
+  inline double getNearestObstacleEdgeDist(const Eigen::Vector3d &pos, double max_range,
+                                           double z_min, double z_max, double yaw,
+                                           double long_ignore, double lat_ignore) {
+    return getNearestObstacleEdgeDistImpl(pos, max_range, z_min, z_max, yaw, long_ignore,
+                                          lat_ignore, -1e9, 1e9, 1e9);
+  }
+
+  // Same as above, but only obstacles inside the body-frame corridor
+  // (x_min <= bx <= x_max, |by| <= y_abs) are considered.
+  inline double getNearestObstacleEdgeDistInBox(const Eigen::Vector3d &pos, double z_min,
+                                                double z_max, double yaw, double x_min,
+                                                double x_max, double y_abs,
+                                                double long_ignore, double lat_ignore) {
+    const double max_range = std::max(std::max(std::fabs(x_min), std::fabs(x_max)) + 0.6,
+                                      y_abs + 0.6) + 0.4;
+    return getNearestObstacleEdgeDistImpl(pos, max_range, z_min, z_max, yaw, long_ignore,
+                                          lat_ignore, x_min, x_max, y_abs);
+  }
+
+  inline double getNearestObstacleEdgeDistImpl(const Eigen::Vector3d &pos, double max_range,
+                                                 double z_min, double z_max, double yaw,
+                                                 double long_ignore, double lat_ignore,
+                                                 double x_min, double x_max, double y_abs) {
+    if (!isInMap(pos)) return max_range;
+    const double hl = 0.5 * mp_.footprint_length_;
+    const double hw = 0.5 * mp_.footprint_width_;
+    const double ox = mp_.footprint_offset_x_;
+    const double oy = mp_.footprint_offset_y_;
+    Eigen::Vector3i id_c;
+    posToIndex(pos, id_c);
+    const int r = static_cast<int>(std::ceil(max_range / mp_.resolution_)) + 1;
+    const double c = std::cos(yaw), s = std::sin(yaw);
+    double best = max_range;
+    for (int dx = -r; dx <= r; ++dx) {
+      for (int dy = -r; dy <= r; ++dy) {
+        const double h2 = std::pow(dx * mp_.resolution_, 2) + std::pow(dy * mp_.resolution_, 2);
+        if (h2 > (max_range + mp_.resolution_) * (max_range + mp_.resolution_)) continue;
+        for (int dz = -60; dz <= 60; ++dz) {
+          const Eigen::Vector3i id(id_c(0) + dx, id_c(1) + dy, id_c(2) + dz);
+          if (!isInMap(id)) continue;
+          const int addr = toAddress(id);
+          if (md_.occupancy_buffer_[addr] <= mp_.min_occupancy_log_) continue;
+          Eigen::Vector3d q;
+          indexToPos(id, q);
+          if (q(2) < z_min || q(2) > z_max) continue;
+          const double ex = q(0) - pos(0), ey = q(1) - pos(1);
+          const double bx = c * ex + s * ey;
+          const double by = -s * ex + c * ey;
+          if (std::abs(bx) < long_ignore && std::abs(by) < lat_ignore) continue;
+          if (bx < x_min || bx > x_max) continue;
+          if (std::fabs(by) > y_abs) continue;
+          const double edge = std::max(0.0, std::max(std::fabs(bx - ox) - hl,
+                                                     std::fabs(by - oy) - hw));
+          if (edge < best) best = edge;
+        }
+      }
+    }
+    return best;
+  }
+
   inline void boundIndex(Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3i& id);
   inline bool isUnknown(const Eigen::Vector3d& pos);
