@@ -88,11 +88,11 @@ scan_planner_node:
     # person), all-round floor of 0.20 m protects the sides/rear.
     fsm.near_forward_long_ignore: 0.80
     fsm.near_forward_lat_ignore: 0.45
-    fsm.near_forward_enter: 0.50
-    fsm.near_forward_exit: 0.70
+    fsm.near_forward_enter: 0.80
+    fsm.near_forward_exit: 0.95
     fsm.near_forward_max: 1.30
     fsm.near_omni_enter: 0.20
-    fsm.near_omni_exit: 0.30
+    fsm.near_omni_exit: 0.25
     fsm.near_hold_enter: 0.25
     fsm.near_hold_exit: 0.40
     # 转弯参考角速度(rad/s)：铺开距离 S_blend = v*|Δψ|/rate 的参考值

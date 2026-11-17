@@ -1173,7 +1173,7 @@ namespace scan_planner
     // only once the obstacle has moved out of the hysteresis band.
     if (planner_manager_->grid_map_)
     {
-      const double z_lo = odom_pos_(2) - 0.42;
+      const double z_lo = odom_pos_(2) - 0.30;
       const double z_hi = odom_pos_(2) + 1.20;
       // Forward corridor (|lateral| <= 0.35 m): keep >=0.50 m clearance from
       // anything directly in the driving direction (dynamic-person indicator).
@@ -1183,11 +1183,14 @@ namespace scan_planner
       // Omnidirectional floor: never let anything come closer than 0.20 m to the
       // body edge from any side (side/rear contact protection).
       const double d_all = planner_manager_->grid_map_->getNearestObstacleEdgeDist(
-          odom_pos_, 0.60, z_lo, z_hi, getOdomYaw(), near_long_ignore_, near_lat_ignore_);
-      if (d_fwd < near_forward_enter_ || d_all < near_omni_enter_)
-        near_hold_active_ = true;
-      else if (d_fwd > near_forward_exit_ && d_all > near_omni_exit_)
-        near_hold_active_ = false;
+          odom_pos_, 0.60, z_lo, z_hi, getOdomYaw(),
+          near_forward_long_ignore_, near_forward_lat_ignore_);
+      // Non-latched test: hold only while the clearance is actually violated.
+      // The old enter/exit hysteresis could keep the robot stopped forever in
+      // front of a weak or persistent return that sits between the two
+      // thresholds (real case: a stale point held at 0.60 m while enter=0.55
+      // and exit=0.68, so the robot never resumed).
+      near_hold_active_ = (d_fwd < near_forward_enter_) || (d_all < near_omni_enter_);
       if (near_hold_active_)
       {
         RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000,
@@ -1540,6 +1543,17 @@ namespace scan_planner
     }
     if (best_w > 0.80 || std::fabs(best_c) < 0.02 || std::fabs(best_c) > 0.60)
       return;
+    // Do not lock onto a "gap" when a live obstacle is already very close
+    // (e.g. a person standing inside / beside the gap): the free interval could
+    // be the space between the person and a wall, and locking would drive
+    // towards the person instead of away from them.
+    {
+      const double d_near = planner_manager_->grid_map_->getNearestObstacleEdgeDist(
+          start, 0.70, start(2) - 0.42, start(2) + 1.20, yaw,
+          near_forward_long_ignore_, near_forward_lat_ignore_);
+      if (d_near < 0.35)
+        return;
+    }
     Eigen::Vector3d gap_pt(start(0) + u(0) * best_d + left(0) * best_c,
                            start(1) + u(1) * best_d + left(1) * best_c,
                            target(2));

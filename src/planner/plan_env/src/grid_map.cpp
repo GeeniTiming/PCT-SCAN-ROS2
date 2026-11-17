@@ -812,6 +812,40 @@ void GridMap::raycastProcess()
                  mp_.clamp_max_log_);
     applyOccupancyUpdate(idx, new_log_odds);
   }
+
+  // --- stale-cell decay near the robot -------------------------------------
+  // A person walking through the local map leaves a few occupied cells behind.
+  // Ray clearing only removes cells that later rays actually traverse; cells in
+  // the shadow of other objects can stay occupied for a long time and make the
+  // robot stop in front of "nothing". Decay weak cells close to the robot that
+  // were NOT observed in this scan, so such stale returns fade within ~2 s.
+  // Strongly observed cells (walls, real furniture) are left untouched.
+  {
+    const double decay_step = 0.05;
+    const double decay_radius = 1.5;
+    const double decay_occ_cap = 2.5;   // only weak evidence cells decay
+    Eigen::Vector3d lo = md_.ray_pos_ - Eigen::Vector3d(decay_radius, decay_radius, 0.60);
+    Eigen::Vector3d hi = md_.ray_pos_ + Eigen::Vector3d(decay_radius, decay_radius, 0.80);
+    Eigen::Vector3i id_lo, id_hi;
+    posToIndex(lo, id_lo);
+    posToIndex(hi, id_hi);
+    boundIndex(id_lo);
+    boundIndex(id_hi);
+    for (int x = id_lo(0); x <= id_hi(0); ++x)
+      for (int y = id_lo(1); y <= id_hi(1); ++y)
+        for (int z = id_lo(2); z <= id_hi(2); ++z)
+        {
+          const Eigen::Vector3i id(x, y, z);
+          const int addr = toAddress(id);
+          const double occ = md_.occupancy_buffer_[addr];
+          if (occ <= 0.0 || occ >= decay_occ_cap)
+            continue;
+          if (md_.flag_rayend_[addr] == md_.raycast_num_ ||
+              md_.flag_traverse_[addr] == md_.raycast_num_)
+            continue;
+          applyOccupancyUpdate(id, std::max(0.0, occ - decay_step));
+        }
+  }
 }
 
 Eigen::Vector3d GridMap::closetPointInMap(const Eigen::Vector3d &pt, const Eigen::Vector3d &ray_pos)
