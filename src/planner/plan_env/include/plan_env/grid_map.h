@@ -67,6 +67,7 @@ struct MappingParameters {
   string footprint_model_;
   double footprint_length_, footprint_width_, footprint_offset_x_, footprint_offset_y_;
   double safety_clearance_, inflation_radius_xy_;
+  double rectangle_margin_;
   bool map_sliding_en_;
   double map_sliding_thresh_;
   int map_sliding_thresh_vox_;
@@ -202,7 +203,9 @@ public:
   std::uint64_t traceMapVersion() const { return trace_map_version_; }
   double collisionRadius() const { return mp_.inflation_radius_xy_; }
   double collisionOffset() const {
-    return mp_.footprint_model_ == "circumscribed_circle" ? 0.0 : mp_.double_cylinder_offset_;
+    if (mp_.footprint_model_ == "circumscribed_circle") return 0.0;
+    if (mp_.footprint_model_ == "oriented_rectangle") return 0.0;
+    return mp_.double_cylinder_offset_;
   }
 
   Eigen::Vector3d getOrigin();
@@ -396,6 +399,31 @@ inline int GridMap::getInflateOccupancy(Eigen::Vector3d pos, double yaw) {
     return getInflateOccupancyFromBuffer(pos, md_.occupancy_buffer_inflate_);
   }
 
+  if (mp_.footprint_model_ == "oriented_rectangle") {
+    // Body outline at the query yaw, tested against the inflated buffer.
+    // Obstacles are inflated by safety_clearance + rectangle_margin, so every
+    // outline sample must stay free of the inflated cells.
+    const double hl = 0.5 * mp_.footprint_length_;
+    const double hw = 0.5 * mp_.footprint_width_;
+    const double ox = mp_.footprint_offset_x_;
+    const double oy = mp_.footprint_offset_y_;
+    const double reach = std::hypot(hl + std::abs(ox), hw + std::abs(oy));
+    if (!isInMap(Eigen::Vector3d(pos(0) + reach, pos(1), pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0) - reach, pos(1), pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0), pos(1) + reach, pos(2))) ||
+        !isInMap(Eigen::Vector3d(pos(0), pos(1) - reach, pos(2)))) return -1;
+    const Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
+    const Eigen::Vector3d lateral(-std::sin(yaw), std::cos(yaw), 0.0);
+    // 4 corners + 4 edge midpoints + centre.
+    const double lx[9] = {ox + hl, ox - hl, ox + hl, ox - hl, ox + hl, ox - hl, ox, ox, ox};
+    const double ly[9] = {oy + hw, oy + hw, oy - hw, oy - hw, oy, oy, oy + hw, oy - hw, oy};
+    for (int i = 0; i < 9; ++i) {
+      const Eigen::Vector3d sample = pos + lx[i] * heading + ly[i] * lateral;
+      const int occ = getInflateOccupancyFromBuffer(sample, md_.occupancy_buffer_inflate_);
+      if (occ != 0) return occ;
+    }
+    return 0;
+  }
   Eigen::Vector3d heading(std::cos(yaw), std::sin(yaw), 0.0);
   Eigen::Vector3d front = pos + mp_.double_cylinder_offset_ * heading;
   Eigen::Vector3d rear = pos - mp_.double_cylinder_offset_ * heading;

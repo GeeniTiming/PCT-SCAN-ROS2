@@ -49,6 +49,17 @@ void GridMap::initMap(rclcpp::Node *node)
         mp_.footprint_offset_y_, mp_.safety_clearance_, std::sqrt(2.0)*mp_.resolution_, mp_.inflation_radius_xy_);
   } else if (mp_.footprint_model_ == "legacy_double_cylinder") {
     mp_.inflation_radius_xy_ = std::max(0.0, mp_.double_cylinder_radius_);
+  } else if (mp_.footprint_model_ == "oriented_rectangle") {
+    // Rectangle geometry: obstacles are inflated by clearance + one grid-cell
+    // margin; the outline check in getInflateOccupancy then enforces the actual
+    // 0.82 x 0.43 body shape, so a 1.03 m gate stays passable.
+    load_parameter(node_, "grid_map.rectangle_margin", mp_.rectangle_margin_, 0.03);
+    mp_.inflation_radius_xy_ = mp_.safety_clearance_ + mp_.rectangle_margin_;
+    RCLCPP_INFO(node_->get_logger(),
+        "[Footprint] oriented_rectangle length=%.3f width=%.3f offset=(%.3f,%.3f) clearance=%.3f margin=%.3f inflation_radius=%.3f",
+        mp_.footprint_length_, mp_.footprint_width_, mp_.footprint_offset_x_,
+        mp_.footprint_offset_y_, mp_.safety_clearance_, mp_.rectangle_margin_,
+        mp_.inflation_radius_xy_);
   } else {
     throw std::invalid_argument("unknown grid_map.footprint_model: " + mp_.footprint_model_);
   }

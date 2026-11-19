@@ -4,7 +4,7 @@ namespace scan_planner {
 struct ArrivalPolicy {
   double since = -1.0;
   bool near(bool fresh, double distance) const {
-    return fresh && std::isfinite(distance) && distance >= 0.0 && distance < 0.20;
+    return fresh && std::isfinite(distance) && distance >= 0.0 && distance < 0.45;
   }
   bool settled(bool fresh, double distance, double speed, double now) {
     if (!near(fresh, distance) || !std::isfinite(speed) || speed < 0 || speed >= 0.05) {
