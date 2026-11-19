@@ -48,7 +48,7 @@ scan_planner_node:
     fsm.navi_mode: 3
     # 重规划阈值(m)：局部参考点相对本条轨迹起点前进超过该距离即重规划。
     # 调大 → 重规划少、省算力但贴合参考路径更松；调小 → 更勤、易抖
-    fsm.thresh_replan: 0.3
+    fsm.thresh_replan: 0.5
     # 到点停规划阈值(m)：轨迹点距目标小于该值就不再重规划。
     # 主要对 navi_mode=1/2 有意义（mode3 的 end_pt_ 是远端全局目标）
     fsm.thresh_no_replan: 0.1
@@ -57,7 +57,7 @@ scan_planner_node:
     # 但单次优化更慢、局部绕障能力下降。建议 3.5~6.0
     fsm.planning_horizon: 3.0
     # 紧急时间(s)：碰撞点距当前时间小于该值直接急停，否则先尝试重规划
-    fsm.emergency_time: 1.0
+    fsm.emergency_time: 0.3
     # 【重要】定位真正丢失的判定时长(s)：odom 超过该时长才算“丢失”并急停。
     # 短暂掉帧（如 0.5~0.7s）不会发停车轨迹，控制器继续跟随旧轨迹；
     # 2.5Hz 的 odom 建议 1.5~2.0，避免频繁误触发急停
@@ -90,13 +90,13 @@ scan_planner_node:
     # 栅格分辨率(m)：越小越精细但内存/算力越大。0.3m/s 场景 0.05 足够
     grid_map.resolution: 0.05
     # 局部滑动地图尺寸(m, x/y/z)：以机器人为中心的栅格窗口大小
-    grid_map.sliding_map_size_x: 10.0
-    grid_map.sliding_map_size_y: 10.0
-    grid_map.sliding_map_size_z: 5.0
+    grid_map.sliding_map_size_x: 5.0
+    grid_map.sliding_map_size_y: 5.0
+    grid_map.sliding_map_size_z: 2.0
     # 局部更新范围(m)：只有距传感器该范围内的点参与写入/raycast，控制计算量
     grid_map.local_update_range_x: 5.0
     grid_map.local_update_range_y: 5.0
-    grid_map.local_update_range_z: 2.5
+    grid_map.local_update_range_z: 1.5
     # 是否启用滑动地图（false=固定地图，真机不推荐）
     grid_map.map_sliding_en: true
     # 触发滑动的位移阈值(m)：机器人移动超过该值才整体挪动栅格窗口
@@ -107,21 +107,21 @@ scan_planner_node:
     #   (1) 障碍物膨胀半径（grid_map.cpp:214-232）
     #   (2) 双圆盘碰撞检测 getInflateOccupancy（grid_map.h:369-379）
     # 调大更安全，但窄道里更容易被判碰撞并触发重规划；必须按实机标定
-    grid_map.double_cylinder_radius: 0.15
+    grid_map.double_cylinder_radius: 0.20
     # 双圆盘前后偏移(m)：两个碰撞圆相对机身中心的前/后距离
-    grid_map.double_cylinder_offset: 0.15
+    grid_map.double_cylinder_offset: 0.20
     # 机身高度(m)：参考路径每点 z += body_height（reference_path_utils.h:117）。
     # 需与 ground_height 配合，让参考路径落在可通行高度
-    grid_map.body_height: 0.2
+    grid_map.body_height: 0.0
     # 障碍物向上/向下膨胀(m)：把障碍在 z 方向加厚，避免被从上方或下方钻过
-    grid_map.obstacles_inflation_z_up: 0.1
-    grid_map.obstacles_inflation_z_down: 0.1
+    grid_map.obstacles_inflation_z_up: 0.0
+    grid_map.obstacles_inflation_z_down: 0.0
     # 地图坐标系名。必须与 fsm.odom_topic 的 frame_id 一致（当前 map）
     grid_map.frame_id: map
     # 滑动地图 TF 子坐标系名（仅用于发布 map->sliding_map 变换做可视化）
     grid_map.sliding_map_frame_id: sliding_map
     # 地图 z 下界(m)：即 map_origin_ 的 z。地面被误判为障碍时优先查这里
-    grid_map.ground_height: 0.0
+    grid_map.ground_height: -0.5
     # 传感器类型：lidar / depth。真机用 lidar
     grid_map.sensor_type: lidar
     # 输入点云是否已在世界(map)系：false=点云在传感器系，需按位姿变换
@@ -160,7 +160,7 @@ scan_planner_node:
     # 单条射线最大长度(m)：超长视为自由空间，避免远端噪声记成障碍
     grid_map.max_ray_length: 5.0
     # 可视化高度(m)：只发布传感器 z 之上该高度以内的占据格，仅影响显示
-    grid_map.vis_height: 0.3
+    grid_map.vis_height: 0.5
     # 是否统计/打印建图耗时（调试用）
     grid_map.show_occ_time: false
 
@@ -203,7 +203,7 @@ scan_planner_node:
     optimization.order: 3
 
     # ------------------------------------------------------------------
-    # 六、可选但本文件未显式设置的参数（代码有默认值，需要时再取消注释）
+    # 六、可选但本文件未显式设置的参数（代码有默认值，需要时再取消注释s）
     # ------------------------------------------------------------------
     # 动态可行性检查的额外余量（默认 1.0）：实际限值 = max_vel + vel_tolerance
     # optimization.vel_tolerance: 1.0
